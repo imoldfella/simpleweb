@@ -102,7 +102,7 @@ impl Default for MyConfig {
         let cpu_count = num_cpus::get();
         MyConfig {
             threads: cpu_count,
-            host: "127.0.0.1:8443".to_string(),
+            host: "127.0.0.1:8444".to_string(),
         }
     }
 }
@@ -184,36 +184,34 @@ impl Server {
             for event in events.iter() {
                 println!("Got event: {:?}", event);
                 match event.token() {
-                    SERVER => loop {
-                        match listener.accept() {
-                            Ok((mut stream, addr)) => {
-                                println!("Accepted connection from {}", addr);
-                                let token = next_token;
-                                next_token.0 += 1;
+                    SERVER => match listener.accept() {
+                        Ok((mut stream, addr)) => {
+                            println!("Accepted connection from {}", addr);
+                            let token = next_token;
+                            next_token.0 += 1;
 
-                                // Register after ownership is clear
-                                poll.registry().register(
-                                    &mut stream,
-                                    token,
-                                    Interest::READABLE.add(Interest::WRITABLE),
-                                )?;
+                            // Register after ownership is clear
+                            poll.registry().register(
+                                &mut stream,
+                                token,
+                                Interest::READABLE.add(Interest::WRITABLE),
+                            )?;
 
-                                let client = TlsClient::new(stream, self.tls_config.clone());
-                                clients.insert(token, client);
+                            let client = TlsClient::new(stream, self.tls_config.clone());
+                            clients.insert(token, client);
 
-                                // poll.registry()
-                                //     .register(&mut stream, token, Interest::READABLE)?;
-                                // poll.registry().register(
-                                //     &mut stream,
-                                //     token,
-                                //     Interest::READABLE.add(Interest::WRITABLE),
-                                // )?;
-                                //clients.insert(token, client);
-                            }
-                            Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => break,
-                            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
-                            Err(e) => return Err(e),
+                            // poll.registry()
+                            //     .register(&mut stream, token, Interest::READABLE)?;
+                            // poll.registry().register(
+                            //     &mut stream,
+                            //     token,
+                            //     Interest::READABLE.add(Interest::WRITABLE),
+                            // )?;
+                            //clients.insert(token, client);
                         }
+                        Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => break,
+                        Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                        Err(e) => return Err(e),
                     },
                     token => {
                         println!("Token {}", token.0);
@@ -249,7 +247,7 @@ impl Server {
 
 pub fn main() {
     let config = MyConfig {
-        host: "127.0.0.1:8443".to_string(),
+        host: "127.0.0.1:8321".to_string(),
         threads: 1,
     };
 
