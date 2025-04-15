@@ -93,7 +93,8 @@ pub struct MyConfig {
 }
 impl Default for MyConfig {
     fn default() -> Self {
-        MyConfig { threads: 1 }
+        let cpu_count = num_cpus::get();
+        MyConfig { threads: cpu_count }
     }
 }
 pub struct Server {
@@ -143,8 +144,14 @@ impl Server {
     }
 
     fn run_thread(&self, thread: usize) -> std::io::Result<()> {
+        use socket2::{Domain, Socket, Type};
+
         let addr: SocketAddr = "127.0.0.1:8443".parse().unwrap();
-        let mut listener = TcpListener::bind(addr)?;
+        let socket = Socket::new(Domain::IPV4, Type::STREAM, None)?;
+        socket.set_reuse_address(true)?;
+        socket.bind(&addr.into())?;
+        socket.listen(128)?;
+        let mut listener = TcpListener::from_std(socket.into());
 
         let mut poll = Poll::new()?;
         poll.registry()
