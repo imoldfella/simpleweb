@@ -4,7 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+hwloc = "*"
 rustls = "0.23.26"
-mio = {version="1.0.3", features=["os-poll","net"] }
+mio = { version = "1.0.3", features = ["os-poll", "net"] }
 once_cell = "1.21.3"
 rustls-pemfile = "2.2.0"
