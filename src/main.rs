@@ -1,98 +1,59 @@
 use mio::net::{TcpListener, TcpStream};
 use mio::{Events, Interest, Poll, Token};
 use rustls::{ServerConfig, ServerConnection, StreamOwned};
-use std::collections::HashMap;
+
+use simpleweb::tls::{load_tls_config, TlsClient};
+use slab::Slab;
+use std::collections::{HashMap, VecDeque};
 use std::fs::File;
+use std::future::Future;
 use std::io::{Read, Write};
 use std::net::SocketAddr;
+use std::pin::Pin;
 use std::sync::Arc;
 
-const SERVER: Token = Token(0);
+use std::task::{Context, RawWaker, RawWakerVTable, Waker};
 
-#[derive(Debug, Clone)]
+
+const SERVER_TOKEN: Token = Token(0);
+
+// each worker thread has its own executor. No stealing/helping.
+
+struct Task {
+    future: Pin<Box<dyn Future<Output = ()>>>,
+    woken: bool, // optionally, to dedup wakeups
+}
+
 pub struct WorkerThread {
+    // executor
+    tasks: Slab<Task>,
     cpu_socket: usize,
+    clients: slab::Slab<TlsClient>,
 }
-struct TlsClient {
-    conn: ServerConnection,
-    socket: TcpStream,
-}
+unsafe impl Sync for WorkerThread {}
+unsafe impl Send for WorkerThread {}
+impl WorkerThread {
 
-impl TlsClient {
-    // fn new(socket: TcpStream, config: Arc<ServerConfig>) -> Self {
-    //     let conn = ServerConnection::new(config).unwrap();
-    //     TlsClient { conn, socket }
-    // }
 
-    fn new(socket: TcpStream, config: Arc<ServerConfig>) -> Self {
-        let conn = ServerConnection::new(config).unwrap();
-        TlsClient { conn, socket }
+    pub fn spawn<F: Future<Output = ()> + 'static>(&mut self, fut: F) {
+        self.tasks.insert(Task{
+            woken: false,
+            future: Box::pin(fut)
+        });
     }
 
-    fn write_page(&mut self) -> std::io::Result<bool> {
-        let resp = b"HTTP/1.1 200 OK\r\nContent-Length: 13\r\n\r\nHello, world!";
-        let writer = &mut self.conn.writer();
-        writer.write_all(resp)?;
-        writer.flush()?;
-        _ = self.conn.write_tls(&mut self.socket)?;
-        Ok(false) // Close after writing
-    }
+    pub fn run(&mut self) {
+        let waker = dummy_waker();
+        let mut cx = Context::from_waker(&waker);
 
-    fn ready(&mut self) -> std::io::Result<bool> {
-        // Read encrypted data into the TLS connection
-        match self.conn.read_tls(&mut self.socket) {
-            Ok(0) => return Ok(false), // Connection closed
-            Ok(_) => {}
-            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => return Ok(true),
-
-            Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => return Ok(true),
-            Err(_) => return Ok(false),
-        }
-
-        // Process decrypted packets
-        match self.conn.process_new_packets() {
-            Ok(_) => {}
-            Err(_) => return Ok(false),
-        }
-
-        _ = self.conn.write_tls(&mut self.socket)?;
-
-        if self.conn.is_handshaking() {
-            return Ok(true); // Wait for more data
-        }
-
-        // Read decrypted application data
-        let mut buf = [0u8; 1024];
-        let op = self.conn.reader().read(&mut buf);
-        match op {
-            Ok(_) => self.write_page(),
-            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => Ok(true),
-            Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => return Ok(true),
-            Err(_) => Ok(false),
+        while let Some(mut task) = self.tasks.try_remove(1) {
+            match task.future.poll(&mut cx) {
+                std::task::Poll::Pending => self.tasks.insert(task),
+                std::task::Poll::Ready(()) => {}
+            }
         }
     }
 }
-
-fn load_tls_config() -> Arc<ServerConfig> {
-    use rustls::pki_types::{CertificateDer, PrivateKeyDer};
-    use rustls::server::ServerConfig;
-    use std::io::BufReader;
-
-    let cert_file = &mut BufReader::new(File::open("cert.pem").unwrap());
-    let key_file = &mut BufReader::new(File::open("key.pem").unwrap());
-
-    let certs: Vec<CertificateDer> = rustls_pemfile::certs(cert_file)
-        .collect::<Result<_, _>>()
-        .unwrap();
-    let keys = rustls_pemfile::private_key(key_file).unwrap().unwrap();
-
-    ServerConfig::builder()
-        .with_no_client_auth()
-        .with_single_cert(certs, keys)
-        .map(Arc::new)
-        .expect("bad certificate or key")
-}
-
 pub struct MyConfig {
     threads: usize,
     host: String,
@@ -113,26 +74,28 @@ pub struct Server {
     worker: Box<[WorkerThread]>,
     tls_config: Arc<ServerConfig>,
 }
-
+static mut SERVER: *const Server = std::ptr::null();
+pub fn get_server() -> &'static Server {
+    unsafe { &*SERVER }
+}
 pub struct Supervisor {
-    server: Arc<Server>,
     join_handle: Vec<std::thread::JoinHandle<()>>,
 }
-impl Supervisor {
-    pub fn new(config: MyConfig) -> Self {
-        let server = Arc::new(Server::new(config).unwrap());
-        let mut join_handle = Vec::with_capacity(server.worker.len());
-        for id in 0..server.worker.len() {
-            let server = server.clone();
-            join_handle.push(std::thread::spawn(move || {
-                server.run_thread(id);
-            }));
-        }
-        Supervisor {
-            server,
-            join_handle: join_handle,
-        }
+pub fn init_server(config: MyConfig) -> Supervisor {
+    let server = Arc::new(Server::new(config).unwrap());
+    let mut join_handle = Vec::with_capacity(server.worker.len());
+    for id in 0..server.worker.len() {
+        let server = server.clone();
+        join_handle.push(std::thread::spawn(move || {
+            _ = server.run_thread(id);
+        }));
     }
+    Supervisor {
+        join_handle: join_handle,
+    }
+}
+impl Supervisor {
+
     pub fn join(&mut self) {
         for handle in self.join_handle.drain(..) {
             handle.join().unwrap();
@@ -142,7 +105,16 @@ impl Supervisor {
 
 impl Server {
     pub fn new(config: MyConfig) -> std::io::Result<Self> {
-        let worker = vec![WorkerThread { cpu_socket: 0 }; config.threads].into_boxed_slice();
+        let worker = (0..config.threads).map(
+        |_| {
+            WorkerThread { 
+                tasks: Slab::new(),
+                cpu_socket: 0, // This will be set later
+                clients: slab::Slab::with_capacity(1024), // Adjust capacity as needed
+            }
+        }).collect::<Vec<_>>().into_boxed_slice();
+        
+
         let cpu_socket = vec![(0 as usize, config.threads)];
         let tls_config = load_tls_config();
         let o = Server {
@@ -166,11 +138,11 @@ impl Server {
 
         let mut poll = Poll::new()?;
         poll.registry()
-            .register(&mut listener, SERVER, Interest::READABLE)?;
+            .register(&mut listener, SERVER_TOKEN, Interest::READABLE)?;
 
         let mut events = Events::with_capacity(128);
         let mut clients = HashMap::new();
-        let mut next_token = Token(SERVER.0 + 1);
+        let mut next_token = Token(SERVER_TOKEN.0 + 1);
 
         println!("TLS server listening on https://{}", addr);
 
@@ -184,7 +156,7 @@ impl Server {
             for event in events.iter() {
                 println!("Got event: {:?}", event);
                 match event.token() {
-                    SERVER => match listener.accept() {
+                    SERVER_TOKEN => match listener.accept() {
                         Ok((mut stream, addr)) => {
                             println!("Accepted connection from {}", addr);
                             let token = next_token;
@@ -251,6 +223,52 @@ pub fn main() {
         threads: 1,
     };
 
-    let mut server = Supervisor::new(config);
+    let mut server = init_server(config);
     server.join();
+}
+
+fn dummy_waker() -> Waker {
+    fn no_op(_: *const ()) {}
+    fn clone(_: *const ()) -> RawWaker {
+        RawWaker::new(std::ptr::null(), &VTABLE)
+    }
+
+    static VTABLE: RawWakerVTable =
+        RawWakerVTable::new(clone, no_op, no_op, no_op);
+
+    unsafe { Waker::from_raw(RawWaker::new(std::ptr::null(), &VTABLE)) }
+}
+
+use std::sync::{ Mutex};
+
+
+fn make_waker(index: usize, thread: usize) -> Waker {
+    unsafe fn clone(ptr: *const ()) -> RawWaker {
+        let (index, exec): (usize, Arc<Mutex<SingleThreadExecutor>>) =
+            (*(ptr as *const (usize, Arc<Mutex<SingleThreadExecutor>>))).clone();
+        let boxed = Box::new((index, exec));
+        RawWaker::new(Box::into_raw(boxed) as *const (), &VTABLE)
+    }
+
+    unsafe fn wake(ptr: *const ()) {
+        let (index, exec): (usize, Arc<Mutex<SingleThreadExecutor>>) =
+            *Box::from_raw(ptr as *mut (usize, Arc<Mutex<SingleThreadExecutor>>));
+        exec.lock().unwrap().wake(index);
+    }
+
+    unsafe fn wake_by_ref(ptr: *const ()) {
+        let (index, exec): &(usize, Arc<Mutex<SingleThreadExecutor>>) =
+            &*(ptr as *const (usize, Arc<Mutex<SingleThreadExecutor>>));
+        exec.lock().unwrap().wake(*index);
+    }
+
+    unsafe fn drop(ptr: *const ()) {
+        drop(Box::from_raw(ptr as *mut (usize, Arc<Mutex<SingleThreadExecutor>>)));
+    }
+
+    static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, wake, wake_by_ref, drop);
+
+    let boxed = Box::new((index, thread));
+    let raw = RawWaker::new(Box::into_raw(boxed) as *const (), &VTABLE);
+    unsafe { Waker::from_raw(raw) }
 }
