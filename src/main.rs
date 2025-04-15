@@ -19,9 +19,24 @@ struct TlsClient {
 }
 
 impl TlsClient {
-    fn new(socket: TcpStream, config: Arc<ServerConfig>) -> Self {
+    // fn new(socket: TcpStream, config: Arc<ServerConfig>) -> Self {
+    //     let conn = ServerConnection::new(config).unwrap();
+    //     TlsClient { conn, socket }
+    // }
+
+    fn new(
+        mut socket: TcpStream,
+        token: Token,
+        poll: &Poll,
+        config: Arc<ServerConfig>,
+    ) -> std::io::Result<Self> {
+        poll.registry().register(
+            &mut socket,
+            token,
+            Interest::READABLE.add(Interest::WRITABLE),
+        )?;
         let conn = ServerConnection::new(config).unwrap();
-        TlsClient { conn, socket }
+        Ok(Self { conn, socket })
     }
 
     fn write_page(&mut self) -> std::io::Result<bool> {
@@ -90,11 +105,15 @@ fn load_tls_config() -> Arc<ServerConfig> {
 
 pub struct MyConfig {
     threads: usize,
+    host: String,
 }
 impl Default for MyConfig {
     fn default() -> Self {
         let cpu_count = num_cpus::get();
-        MyConfig { threads: cpu_count }
+        MyConfig {
+            threads: cpu_count,
+            host: "127.0.0.1:8443".to_string(),
+        }
     }
 }
 pub struct Server {
@@ -102,6 +121,7 @@ pub struct Server {
     cpu_socket: Vec<(usize, usize)>,
     config: MyConfig,
     worker: Box<[WorkerThread]>,
+    tls_config: Arc<ServerConfig>,
 }
 
 pub struct Supervisor {
@@ -133,12 +153,13 @@ impl Supervisor {
 impl Server {
     pub fn new(config: MyConfig) -> std::io::Result<Self> {
         let worker = vec![WorkerThread { cpu_socket: 0 }; config.threads].into_boxed_slice();
-        let mut cpu_socket = vec![(0 as usize, config.threads)];
-
-        let mut o = Server {
+        let cpu_socket = vec![(0 as usize, config.threads)];
+        let tls_config = load_tls_config();
+        let o = Server {
             cpu_socket,
             config,
             worker,
+            tls_config,
         };
         Ok(o)
     }
@@ -146,9 +167,9 @@ impl Server {
     fn run_thread(&self, thread: usize) -> std::io::Result<()> {
         use socket2::{Domain, Socket, Type};
 
-        let addr: SocketAddr = "127.0.0.1:8443".parse().unwrap();
+        let addr: SocketAddr = self.config.host.parse().unwrap();
         let socket = Socket::new(Domain::IPV4, Type::STREAM, None)?;
-        socket.set_reuse_address(true)?;
+        //socket.set_reuse_address(true)?;
         socket.bind(&addr.into())?;
         socket.listen(128)?;
         let mut listener = TcpListener::from_std(socket.into());
@@ -161,8 +182,6 @@ impl Server {
         let mut clients = HashMap::new();
         let mut next_token = Token(SERVER.0 + 1);
 
-        let tls_config = load_tls_config();
-
         println!("TLS server listening on https://{}", addr);
 
         loop {
@@ -173,17 +192,27 @@ impl Server {
             }
 
             for event in events.iter() {
+                println!("Got event: {:?}", event);
                 match event.token() {
                     SERVER => loop {
                         match listener.accept() {
-                            Ok((mut stream, addr)) => {
+                            Ok((stream, addr)) => {
                                 println!("Accepted connection from {}", addr);
                                 let token = next_token;
                                 next_token.0 += 1;
 
-                                poll.registry()
-                                    .register(&mut stream, token, Interest::READABLE)?;
-                                clients.insert(token, TlsClient::new(stream, tls_config.clone()));
+                                let client =
+                                    TlsClient::new(stream, token, &poll, self.tls_config.clone())?;
+                                clients.insert(token, client);
+
+                                // poll.registry()
+                                //     .register(&mut stream, token, Interest::READABLE)?;
+                                // poll.registry().register(
+                                //     &mut stream,
+                                //     token,
+                                //     Interest::READABLE.add(Interest::WRITABLE),
+                                // )?;
+                                //clients.insert(token, client);
                             }
                             Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => break,
                             Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
@@ -191,18 +220,28 @@ impl Server {
                         }
                     },
                     token => {
+                        println!("Token {}", token.0);
                         if let Some(mut client) = clients.remove(&token) {
                             let keep = match client.ready() {
                                 Ok(keep) => keep,
                                 Err(_) => false,
                             };
                             if keep {
-                                poll.registry().reregister(
-                                    &mut client.socket,
-                                    token,
-                                    Interest::READABLE,
-                                )?;
+                                let mut interest = Interest::READABLE;
+                                if client.conn.wants_write() {
+                                    interest = interest.add(Interest::WRITABLE);
+                                }
+
+                                poll.registry()
+                                    .reregister(&mut client.socket, token, interest)?;
                                 clients.insert(token, client);
+                                // poll.registry().reregister(
+                                //     &mut client.socket,
+                                //     token,
+                                //     Interest::READABLE,
+                                // )?;
+                                // poll.registry().register(&mut stream, token, Interest::READABLE.add(Interest::WRITABLE))?;
+                                //clients.insert(token, client);
                             }
                         }
                     }
@@ -213,7 +252,11 @@ impl Server {
 }
 
 pub fn main() {
-    let config = MyConfig::default();
+    let config = MyConfig {
+        host: "127.0.0.1:8443".to_string(),
+        threads: 1,
+    };
+
     let mut server = Supervisor::new(config);
     server.join();
 }
