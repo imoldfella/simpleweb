@@ -24,19 +24,9 @@ impl TlsClient {
     //     TlsClient { conn, socket }
     // }
 
-    fn new(
-        mut socket: TcpStream,
-        token: Token,
-        poll: &Poll,
-        config: Arc<ServerConfig>,
-    ) -> std::io::Result<Self> {
-        poll.registry().register(
-            &mut socket,
-            token,
-            Interest::READABLE.add(Interest::WRITABLE),
-        )?;
+    fn new(socket: TcpStream, config: Arc<ServerConfig>) -> Self {
         let conn = ServerConnection::new(config).unwrap();
-        Ok(Self { conn, socket })
+        TlsClient { conn, socket }
     }
 
     fn write_page(&mut self) -> std::io::Result<bool> {
@@ -196,13 +186,19 @@ impl Server {
                 match event.token() {
                     SERVER => loop {
                         match listener.accept() {
-                            Ok((stream, addr)) => {
+                            Ok((mut stream, addr)) => {
                                 println!("Accepted connection from {}", addr);
                                 let token = next_token;
                                 next_token.0 += 1;
 
-                                let client =
-                                    TlsClient::new(stream, token, &poll, self.tls_config.clone())?;
+                                // Register after ownership is clear
+                                poll.registry().register(
+                                    &mut stream,
+                                    token,
+                                    Interest::READABLE.add(Interest::WRITABLE),
+                                )?;
+
+                                let client = TlsClient::new(stream, self.tls_config.clone());
                                 clients.insert(token, client);
 
                                 // poll.registry()
