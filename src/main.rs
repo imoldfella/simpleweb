@@ -14,7 +14,6 @@ use std::sync::Arc;
 
 use std::task::{Context, RawWaker, RawWakerVTable, Waker};
 
-
 const SERVER_TOKEN: Token = Token(0);
 
 // each worker thread has its own executor. No stealing/helping.
@@ -32,28 +31,7 @@ pub struct WorkerThread {
 }
 unsafe impl Sync for WorkerThread {}
 unsafe impl Send for WorkerThread {}
-impl WorkerThread {
-
-
-    pub fn spawn<F: Future<Output = ()> + 'static>(&mut self, fut: F) {
-        self.tasks.insert(Task{
-            woken: false,
-            future: Box::pin(fut)
-        });
-    }
-
-    pub fn run(&mut self) {
-        let waker = dummy_waker();
-        let mut cx = Context::from_waker(&waker);
-
-        while let Some(mut task) = self.tasks.try_remove(1) {
-            match task.future.poll(&mut cx) {
-                std::task::Poll::Pending => self.tasks.insert(task),
-                std::task::Poll::Ready(()) => {}
-            }
-        }
-    }
-}
+impl WorkerThread {}
 pub struct MyConfig {
     threads: usize,
     host: String,
@@ -95,7 +73,6 @@ pub fn init_server(config: MyConfig) -> Supervisor {
     }
 }
 impl Supervisor {
-
     pub fn join(&mut self) {
         for handle in self.join_handle.drain(..) {
             handle.join().unwrap();
@@ -105,15 +82,16 @@ impl Supervisor {
 
 impl Server {
     pub fn new(config: MyConfig) -> std::io::Result<Self> {
-        let worker = (0..config.threads).map(
-        |_| {
-            WorkerThread { 
-                tasks: Slab::new(),
-                cpu_socket: 0, // This will be set later
-                clients: slab::Slab::with_capacity(1024), // Adjust capacity as needed
-            }
-        }).collect::<Vec<_>>().into_boxed_slice();
-        
+        let worker = (0..config.threads)
+            .map(|_| {
+                WorkerThread {
+                    tasks: Slab::new(),
+                    cpu_socket: 0,                            // This will be set later
+                    clients: slab::Slab::with_capacity(1024), // Adjust capacity as needed
+                }
+            })
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
 
         let cpu_socket = vec![(0 as usize, config.threads)];
         let tls_config = load_tls_config();
@@ -126,6 +104,28 @@ impl Server {
         Ok(o)
     }
 
+    // let waker = dummy_waker();
+    // let mut cx = Context::from_waker(&waker);
+
+    // while let Some(mut task) = self.tasks.try_remove(1) {
+    //     let mut cx = Context::from_waker(waker);
+    //     let o = task.future.as_mut().poll(&mut cx)
+    //     match o {
+    //         std::task::Poll::Pending => {
+    //             self.tasks.insert(task);
+    //         }
+    //         std::task::Poll::Ready(()) => {}
+    //     }
+    // }
+
+    // pub fn spawn<F: Future<Output = ()> + 'static>(&mut self, fut: F) {
+    //     self.tasks.insert(Task {
+    //         woken: false,
+    //         future: Box::pin(fut),
+    //     });
+    // }
+
+    // spawn a task for each connection; this task will start a new task for each stream (if it's a websocket or webtransport)
     fn run_thread(&self, thread: usize) -> std::io::Result<()> {
         use socket2::{Domain, Socket, Type};
 
@@ -140,8 +140,8 @@ impl Server {
         poll.registry()
             .register(&mut listener, SERVER_TOKEN, Interest::READABLE)?;
 
-        let mut events = Events::with_capacity(128);
-        let mut clients = HashMap::new();
+        let mut events = Events::with_capacity(2048);
+        let mut clients: Slab<TlsClient> = Slab::with_capacity(1024);
         let mut next_token = Token(SERVER_TOKEN.0 + 1);
 
         println!("TLS server listening on https://{}", addr);
@@ -159,27 +159,15 @@ impl Server {
                     SERVER_TOKEN => match listener.accept() {
                         Ok((mut stream, addr)) => {
                             println!("Accepted connection from {}", addr);
-                            let token = next_token;
-                            next_token.0 += 1;
-
-                            // Register after ownership is clear
+                            let entry = clients.vacant_entry();
+                            let token = Token(entry.key());
                             poll.registry().register(
                                 &mut stream,
                                 token,
                                 Interest::READABLE.add(Interest::WRITABLE),
                             )?;
-
                             let client = TlsClient::new(stream, self.tls_config.clone());
-                            clients.insert(token, client);
-
-                            // poll.registry()
-                            //     .register(&mut stream, token, Interest::READABLE)?;
-                            // poll.registry().register(
-                            //     &mut stream,
-                            //     token,
-                            //     Interest::READABLE.add(Interest::WRITABLE),
-                            // )?;
-                            //clients.insert(token, client);
+                            entry.insert(client);
                         }
                         Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => break,
                         Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
@@ -187,7 +175,7 @@ impl Server {
                     },
                     token => {
                         println!("Token {}", token.0);
-                        if let Some(mut client) = clients.remove(&token) {
+                        if let Some(mut client) = clients.get_mut(token.0) {
                             let keep = match client.ready() {
                                 Ok(keep) => keep,
                                 Err(_) => false,
@@ -200,20 +188,18 @@ impl Server {
 
                                 poll.registry()
                                     .reregister(&mut client.socket, token, interest)?;
-                                clients.insert(token, client);
-                                // poll.registry().reregister(
-                                //     &mut client.socket,
-                                //     token,
-                                //     Interest::READABLE,
-                                // )?;
-                                // poll.registry().register(&mut stream, token, Interest::READABLE.add(Interest::WRITABLE))?;
-                                //clients.insert(token, client);
                             }
                         }
                     }
                 }
             }
         }
+    }
+
+    pub fn wake(&self, ptr: *const ()) {
+        let index = ptr as usize;
+        let thread = index >> 24;
+        let index = index & 0x00FFFFFF;
     }
 }
 
@@ -233,42 +219,34 @@ fn dummy_waker() -> Waker {
         RawWaker::new(std::ptr::null(), &VTABLE)
     }
 
-    static VTABLE: RawWakerVTable =
-        RawWakerVTable::new(clone, no_op, no_op, no_op);
+    static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, no_op, no_op, no_op);
 
     unsafe { Waker::from_raw(RawWaker::new(std::ptr::null(), &VTABLE)) }
 }
 
-use std::sync::{ Mutex};
+use std::sync::Mutex;
 
-
+// each function in the vtable can
 fn make_waker(index: usize, thread: usize) -> Waker {
     unsafe fn clone(ptr: *const ()) -> RawWaker {
-        let (index, exec): (usize, Arc<Mutex<SingleThreadExecutor>>) =
-            (*(ptr as *const (usize, Arc<Mutex<SingleThreadExecutor>>))).clone();
-        let boxed = Box::new((index, exec));
-        RawWaker::new(Box::into_raw(boxed) as *const (), &VTABLE)
+        RawWaker::new(ptr, &VTABLE)
     }
 
     unsafe fn wake(ptr: *const ()) {
-        let (index, exec): (usize, Arc<Mutex<SingleThreadExecutor>>) =
-            *Box::from_raw(ptr as *mut (usize, Arc<Mutex<SingleThreadExecutor>>));
-        exec.lock().unwrap().wake(index);
+        get_server().wake(ptr);
     }
 
     unsafe fn wake_by_ref(ptr: *const ()) {
-        let (index, exec): &(usize, Arc<Mutex<SingleThreadExecutor>>) =
-            &*(ptr as *const (usize, Arc<Mutex<SingleThreadExecutor>>));
-        exec.lock().unwrap().wake(*index);
+        get_server().wake(ptr);
     }
 
     unsafe fn drop(ptr: *const ()) {
-        drop(Box::from_raw(ptr as *mut (usize, Arc<Mutex<SingleThreadExecutor>>)));
+        // get_server().drop(ptr);
     }
 
     static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, wake, wake_by_ref, drop);
 
-    let boxed = Box::new((index, thread));
-    let raw = RawWaker::new(Box::into_raw(boxed) as *const (), &VTABLE);
+    let v = (thread << 24) + index;
+    let raw = RawWaker::new(v as *const (), &VTABLE);
     unsafe { Waker::from_raw(raw) }
 }
