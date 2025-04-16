@@ -8,25 +8,25 @@ use io_uring::{opcode, types, IoUring};
 use rustls::{ServerConfig, ServerConnection, StreamOwned};
 use rustls_pemfile::{certs, pkcs8_private_keys};
 
-fn load_tls_config() -> Arc<ServerConfig> {
+
+pub fn load_tls_config() -> Arc<ServerConfig> {
+    use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+    use rustls::server::ServerConfig;
+    use std::io::BufReader;
+
     let cert_file = &mut BufReader::new(File::open("cert.pem").unwrap());
     let key_file = &mut BufReader::new(File::open("key.pem").unwrap());
 
-    let cert_chain = certs(cert_file)
-        .unwrap()
-        .into_iter()
-        .map(rustls::Certificate)
-        .collect();
-
-    let mut keys = pkcs8_private_keys(key_file).unwrap();
-    let key = rustls::PrivateKey(keys.remove(0));
-
-    let config = ServerConfig::builder()
-        .with_no_client_auth()
-        .with_single_cert(cert_chain, key)
+    let certs: Vec<CertificateDer> = rustls_pemfile::certs(cert_file)
+        .collect::<Result<_, _>>()
         .unwrap();
+    let keys = rustls_pemfile::private_key(key_file).unwrap().unwrap();
 
-    Arc::new(config)
+    ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(certs, keys)
+        .map(Arc::new)
+        .expect("bad certificate or key")
 }
 
 fn handle_tls(mut stream: TcpStream, tls_config: Arc<ServerConfig>) {
