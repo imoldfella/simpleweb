@@ -30,7 +30,7 @@ pub fn load_tls_config() -> Arc<ServerConfig> {
 }
 
 fn handle_tls(mut stream: TcpStream, tls_config: Arc<ServerConfig>) {
-    let mut conn = ServerConnection::new(tls_config).unwrap();
+    let conn = ServerConnection::new(tls_config).unwrap();
     let mut tls = StreamOwned::new(conn, stream);
 
     let mut buf = [0u8; 1024];
