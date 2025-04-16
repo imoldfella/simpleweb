@@ -81,6 +81,15 @@ impl Supervisor {
 }
 
 impl Server {
+    // every read is going to return a boxed future? lots of allocations.
+    pub fn read_some(
+        &self,
+        thread: usize,
+        connection: usize,
+        buf: &[u8],
+    ) -> Pin<Box<dyn Future<Output = i32>>> {
+        todo!()
+    }
     pub fn new(config: MyConfig) -> std::io::Result<Self> {
         let worker = (0..config.threads)
             .map(|_| {
@@ -249,4 +258,9 @@ fn make_waker(index: usize, thread: usize) -> Waker {
     let v = (thread << 24) + index;
     let raw = RawWaker::new(v as *const (), &VTABLE);
     unsafe { Waker::from_raw(raw) }
+}
+
+pub async fn handle_connection(thread: usize, connection: usize) {
+    let buf = [0u8; 1024];
+    let n = get_server().read_some(thread, connection, &buf).await;
 }

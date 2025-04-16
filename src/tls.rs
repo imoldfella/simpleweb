@@ -35,6 +35,7 @@ impl TlsClient {
         Ok(false) // Close after writing
     }
 
+    // we call this when mio signals ready. this needs to be converted to async.
     pub fn ready(&mut self) -> std::io::Result<bool> {
         // Read encrypted data into the TLS connection
         match self.conn.read_tls(&mut self.socket) {
