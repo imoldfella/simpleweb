@@ -113,13 +113,16 @@ impl Server {
 impl Server {
     #[cfg(target_os = "linux")]
     pub fn run(&self, thread: usize) -> std::io::Result<()> {
-        let mut ring = IoUring::new(8);
+        use std::os::fd::{AsRawFd, FromRawFd};
+        use io_uring::{opcode, types, IoUring};
+        let ring = IoUring::new(8);
         if ring.is_err() {
             return self.run_mio(thread);
         }
-        let ring = ring.unwrap();
-        let fd = listener.as_raw_fd();
+        let mut ring = ring.unwrap();
         let listener = std::net::TcpListener::bind("127.0.0.1:8443")?;
+        let fd = listener.as_raw_fd();
+
         listener.set_nonblocking(true)?;
         loop {
             let accept_e =
@@ -139,8 +142,8 @@ impl Server {
             if cqe.user_data() == 0x42 {
                 let conn_fd = cqe.result();
                 if conn_fd >= 0 {
-                    let stream = unsafe { TcpStream::from_raw_fd(conn_fd) };
-                    uring_handle_tls(stream, tls_config.clone());
+                    let stream = unsafe { std::net::TcpStream::from_raw_fd(conn_fd) };
+                    crate::linux::uring::uring_handle_tls(stream, self.tls_config.clone());
                 }
             }
         }

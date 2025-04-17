@@ -1,3 +1,10 @@
+use std::{io::{Read, Write}, net::{TcpListener, TcpStream}, os::fd::{AsRawFd, FromRawFd}, sync::Arc};
+
+use io_uring::{opcode, types, IoUring};
+use rustls::{ServerConfig, ServerConnection, StreamOwned};
+
+use crate::crypto::load_tls_config;
+
 pub fn uring_handle_tls(mut stream: TcpStream, tls_config: Arc<ServerConfig>) {
     let conn = ServerConnection::new(tls_config).unwrap();
     let mut tls = StreamOwned::new(conn, stream);
@@ -18,7 +25,7 @@ pub fn uring_handle_tls(mut stream: TcpStream, tls_config: Arc<ServerConfig>) {
     }
 }
 
-fn web_hello() -> std::io::Result<()> {
+pub fn web_hello() -> std::io::Result<()> {
     let tls_config = load_tls_config();
     let listener = TcpListener::bind("127.0.0.1:8443")?;
     listener.set_nonblocking(true)?;
@@ -45,7 +52,7 @@ fn web_hello() -> std::io::Result<()> {
             let conn_fd = cqe.result();
             if conn_fd >= 0 {
                 let stream = unsafe { TcpStream::from_raw_fd(conn_fd) };
-                handle_tls(stream, tls_config.clone());
+                uring_handle_tls(stream, tls_config.clone());
             }
         }
     }
