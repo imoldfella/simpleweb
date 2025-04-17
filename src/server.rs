@@ -1,8 +1,12 @@
+use std::{future::Future, net::SocketAddr, path::Path, pin::Pin, sync::Arc};
 
-use std::{future::Future, net::SocketAddr, pin::Pin, sync::Arc};
-
-use mio::{net::{TcpListener, UdpSocket}, Events, Interest, Poll, Token};
+use crate::error::Result;
+use mio::{
+    net::{TcpListener, UdpSocket},
+    Events, Interest, Poll, Token,
+};
 use rustls::ServerConfig;
+//use s2n_quic::provider::dc::Path;
 use slab::Slab;
 
 use crate::tls::TlsClient;
@@ -103,7 +107,6 @@ impl Server {
             .collect::<Vec<_>>()
             .into_boxed_slice();
 
-   
         let tls_config = crate::crypto::pki::load_tls_config();
         let o = Server {
             // for now assume one cpu socket.
@@ -123,9 +126,9 @@ impl Server {
 }
 impl Server {
     #[cfg(target_os = "linux")]
-    pub fn run(&self, thread: usize) -> std::io::Result<()> {
-        use std::os::fd::{AsRawFd, FromRawFd};
+    pub fn run(&self, thread: usize) -> Result<()> {
         use io_uring::{opcode, types, IoUring};
+        use std::os::fd::{AsRawFd, FromRawFd};
         let ring = IoUring::new(8);
         if ring.is_err() {
             return self.run_mio(thread);
@@ -160,16 +163,24 @@ impl Server {
         }
     }
     #[cfg(not(target_os = "linux"))]
-    pub fn run(&self, thread: usize) -> std::io::Result<()> {
+    pub fn run(&self, thread: usize) -> Result<()> {
         self.run_mio(thread)
     }
     // spawn a task for each connection; this task will start a new task for each stream (if it's a websocket or webtransport)
-    fn run_mio(&self, thread: usize) -> std::io::Result<()> {
-        use std::io::ErrorKind::WouldBlock;
-        use std::io::ErrorKind::Interrupted;
-
-        _  = &self.worker[thread];
+    fn run_mio(&self, thread: usize) -> Result<()> {
         use socket2::{Domain, Socket, Type};
+        use std::io::ErrorKind::Interrupted;
+        use std::io::ErrorKind::WouldBlock;
+        _ = &self.worker[thread];
+
+        let tls = s2n_quic::provider::tls::default::Server::builder()
+            .with_certificate(Path::new("cert.pem"), Path::new("key.pem"))?
+            .with_key_logging()? // enables key logging
+            .build()?;
+        let server = s2n_quic::Server::builder()
+            .with_tls(tls)?
+            // .with_io(Mio::builder(poll.registry(), "0.0.0.0:4433")?)?
+            .start()?;
 
         let addr: SocketAddr = self.config.host.parse().unwrap();
         let socket = Socket::new(Domain::IPV4, Type::STREAM, None)?;
@@ -179,7 +190,6 @@ impl Server {
         let mut listener = TcpListener::from_std(socket.into());
         let mut udp_socket = UdpSocket::bind(addr)?;
 
-
         let mut poll = Poll::new()?;
         poll.registry()
             .register(&mut listener, SERVER_TOKEN, Interest::READABLE)?;
@@ -188,7 +198,7 @@ impl Server {
             UDP_TOKEN,
             Interest::READABLE.add(Interest::WRITABLE),
         )?;
-        
+
         let mut events = Events::with_capacity(2048);
         let mut clients: Slab<TlsClient> = Slab::with_capacity(1024);
         //let mut next_token = Token(SERVER_TOKEN.0 + 1);
@@ -199,7 +209,7 @@ impl Server {
             match poll.poll(&mut events, None) {
                 Ok(_) => {}
                 Err(ref e) if e.kind() == Interrupted => continue,
-                Err(e) => return Err(e),
+                Err(e) => return Err(e.into()),
             }
 
             for event in events.iter() {
@@ -212,9 +222,9 @@ impl Server {
                                 // Process incoming QUIC packet, etc.
                             }
                             Err(ref e) if e.kind() == WouldBlock => {}
-                            Err(e) => return Err(e),
+                            Err(e) => return Err(e.into()),
                         }
-                    },
+                    }
                     SERVER_TOKEN => match listener.accept() {
                         Ok((mut stream, addr)) => {
                             println!("Accepted connection from {}", addr);
@@ -230,10 +240,10 @@ impl Server {
                         }
                         Err(ref e) if e.kind() == Interrupted => break,
                         Err(ref e) if e.kind() == WouldBlock => break,
-                        Err(e) => return Err(e),
+                        Err(e) => return Err(e.into()),
                     },
 
-                    // the 
+                    // the
                     token => {
                         println!("Token {}", token.0);
                         if let Some(client) = clients.get_mut(token.0) {
