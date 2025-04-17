@@ -173,14 +173,14 @@ impl Server {
         use std::io::ErrorKind::WouldBlock;
         _ = &self.worker[thread];
 
-        let tls = s2n_quic::provider::tls::default::Server::builder()
-            .with_certificate(Path::new("cert.pem"), Path::new("key.pem"))?
-            .with_key_logging()? // enables key logging
-            .build()?;
-        let server = s2n_quic::Server::builder()
-            .with_tls(tls)?
-            // .with_io(Mio::builder(poll.registry(), "0.0.0.0:4433")?)?
-            .start()?;
+        // let tls = s2n_quic::provider::tls::default::Server::builder()
+        //     .with_certificate(Path::new("cert.pem"), Path::new("key.pem"))?
+        //     .with_key_logging()? // enables key logging
+        //     .build()?;
+        // let server = s2n_quic::Server::builder()
+        //     .with_tls(tls)?
+        //     // .with_io(Mio::builder(poll.registry(), "0.0.0.0:4433")?)?
+        //     .start()?;
 
         let addr: SocketAddr = self.config.host.parse().unwrap();
         let socket = Socket::new(Domain::IPV4, Type::STREAM, None)?;

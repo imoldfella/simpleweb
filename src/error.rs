@@ -2,7 +2,8 @@
 pub enum Error {
     Io(std::io::Error),
     Tls(rustls::Error),
-    Quic(s2n_quic::provider::tls::default::error::Error),
+    //Quic(s2n_quic::provider::tls::default::error::Error),
+    Quic(quiche::Error),
 }
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -16,11 +17,11 @@ impl From<rustls::Error> for Error {
         Error::Tls(err)
     }
 }
-impl From<s2n_quic::provider::tls::default::error::Error> for Error {
-    fn from(err: s2n_quic::provider::tls::default::error::Error) -> Self {
-        Error::Quic(err)
-    }
-}
+// impl From<s2n_quic::provider::tls::default::error::Error> for Error {
+//     fn from(err: s2n_quic::provider::tls::default::error::Error) -> Self {
+//         Error::Quic(err)
+//     }
+// }
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

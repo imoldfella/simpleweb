@@ -14,10 +14,10 @@ socket2 = "*"
 slab = "0.4.9"
 bytes = "*"
 http = "*"
-s2n-quic = { path = "../s2n-quic/quic/s2n-quic", version = "1.57.0" }
-s2n-quic-h3 = { path = "../s2n-quic/quic/s2n-quic-h3" }
+# s2n-quic = { path = "../s2n-quic/quic/s2n-quic", version = "1.57.0" }
+# s2n-quic-h3 = { path = "../s2n-quic/quic/s2n-quic-h3" }
 h3 = '*'
-
+quiche = "*"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 io-uring = "*"
