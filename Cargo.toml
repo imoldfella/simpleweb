@@ -18,6 +18,9 @@ http = "*"
 # s2n-quic-h3 = { path = "../s2n-quic/quic/s2n-quic-h3" }
 h3 = '*'
 quiche = "*"
+ring = "*"
+log = "*"
+env_logger="*"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 io-uring = "*"

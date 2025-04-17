@@ -43,11 +43,11 @@ use std::cell::RefCell;
 
 use ring::rand::*;
 
-use quiche_apps::args::*;
+// use quiche_apps::args::*;
 
-use quiche_apps::common::*;
+// use quiche_apps::common::*;
 
-use quiche_apps::sendto::*;
+// use quiche_apps::sendto::*;
 
 const MAX_BUF_SIZE: usize = 65507;
 
@@ -61,9 +61,9 @@ fn main() {
     env_logger::builder().format_timestamp_nanos().init();
 
     // Parse CLI parameters.
-    let docopt = docopt::Docopt::new(SERVER_USAGE).unwrap();
-    let conn_args = CommonArgs::with_docopt(&docopt);
-    let args = ServerArgs::with_docopt(&docopt);
+    // let docopt = docopt::Docopt::new(SERVER_USAGE).unwrap();
+    // let conn_args = CommonArgs::with_docopt(&docopt);
+    // let args = ServerArgs::with_docopt(&docopt);
 
     // Setup the event loop.
     let mut poll = mio::Poll::new().unwrap();
@@ -75,7 +75,7 @@ fn main() {
 
     // Set SO_TXTIME socket option on the listening UDP socket for pacing
     // outgoing packets.
-    if !args.disable_pacing {
+   
         match set_txtime_sockopt(&socket) {
             Ok(_) => {
                 pacing = true;
@@ -83,7 +83,7 @@ fn main() {
             },
             Err(e) => debug!("setsockopt failed {:?}", e),
         };
-    }
+   
 
     info!("listening on {:}", socket.local_addr().unwrap());
 
