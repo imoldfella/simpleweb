@@ -3,16 +3,21 @@ use mio::{Events, Interest, Poll, Token};
 use quiche::{Connection, ConnectionId};
 use std::{collections::HashMap, net::SocketAddr, time::Instant};
 
-const SERVER_TOKEN: Token = Token(0);
+const QUIC_TOKEN: Token = Token(usize::MAX - 1);
 const MAX_DATAGRAM_SIZE: usize = 1350;
+const MAX_BUF_SIZE: usize = 65507;
 
 fn main() -> std::io::Result<()> {
+    let mut buf = [0; MAX_BUF_SIZE];
+    let mut out = [0; MAX_BUF_SIZE];
+    let mut pacing = false;
+
     let addr: SocketAddr = "127.0.0.1:4433".parse().unwrap();
     let mut socket = UdpSocket::bind(addr)?;
 
     let mut poll = Poll::new()?;
     poll.registry()
-        .register(&mut socket, SERVER_TOKEN, Interest::READABLE)?;
+        .register(&mut socket, QUIC_TOKEN, Interest::READABLE)?;
 
     let mut events = Events::with_capacity(128);
     let mut buf = [0u8; MAX_DATAGRAM_SIZE];
@@ -36,7 +41,7 @@ fn main() -> std::io::Result<()> {
         poll.poll(&mut events, None)?;
 
         for event in events.iter() {
-            if event.token() != SERVER_TOKEN {
+            if event.token() != QUIC_TOKEN {
                 continue;
             }
 

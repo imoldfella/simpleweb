@@ -20,7 +20,9 @@ h3 = '*'
 quiche = "*"
 ring = "*"
 log = "*"
-env_logger="*"
+env_logger = "0.11.8"
+url = "*"
+octets = "*"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 io-uring = "*"
