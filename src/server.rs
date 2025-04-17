@@ -1,16 +1,15 @@
 use std::{future::Future, net::SocketAddr, pin::Pin, sync::Arc};
 
-use mio::{net::TcpListener, Interest, Poll, Token};
+use mio::{net::TcpListener, Events, Interest, Poll, Token};
 use rustls::ServerConfig;
 use slab::Slab;
 
 use crate::tls::TlsClient;
 const SERVER_TOKEN: Token = Token(0);
 
-
 pub struct MyConfig {
-    threads: usize,
-    host: String,
+    pub threads: usize,
+    pub host: String,
 }
 impl Default for MyConfig {
     fn default() -> Self {
@@ -27,11 +26,11 @@ struct Task {
     woken: bool, // optionally, to dedup wakeups
 }
 
+// this is shared worker state; there is more thread local state in the run functions
 pub struct WorkerThread {
     // executor
-    pub tasks: Slab<Task>,
-    pub cpu_socket: usize,
-    pub clients: slab::Slab<TlsClient>,
+    // tasks: Slab<Task>,
+    // cpu_socket: usize,
 }
 unsafe impl Sync for WorkerThread {}
 unsafe impl Send for WorkerThread {}
@@ -57,7 +56,7 @@ pub fn init_server(config: MyConfig) -> Supervisor {
     for id in 0..server.worker.len() {
         let server = server.clone();
         join_handle.push(std::thread::spawn(move || {
-            _ = server.run_thread(id);
+            _ = server.run_mio(id);
         }));
     }
     Supervisor {
@@ -86,9 +85,9 @@ impl Server {
         let worker = (0..config.threads)
             .map(|_| {
                 WorkerThread {
-                    tasks: Slab::new(),
-                    cpu_socket: 0,                            // This will be set later
-                    clients: slab::Slab::with_capacity(1024), // Adjust capacity as needed
+                    // tasks: Slab::new(),
+                    // cpu_socket: 0,                            // This will be set later
+                    // clients: slab::Slab::with_capacity(1024), // Adjust capacity as needed
                 }
             })
             .collect::<Vec<_>>()
@@ -112,8 +111,47 @@ impl Server {
     }
 }
 impl Server {
+    #[cfg(target_os = "linux")]
+    pub fn run(&self, thread: usize) -> std::io::Result<()> {
+        let mut ring = IoUring::new(8);
+        if ring.is_err() {
+            return self.run_mio(thread);
+        }
+        let ring = ring.unwrap();
+        let fd = listener.as_raw_fd();
+        let listener = std::net::TcpListener::bind("127.0.0.1:8443")?;
+        listener.set_nonblocking(true)?;
+        loop {
+            let accept_e =
+                opcode::Accept::new(types::Fd(fd), std::ptr::null_mut(), std::ptr::null_mut())
+                    .build()
+                    .user_data(0x42);
+
+            unsafe {
+                ring.submission()
+                    .push(&accept_e)
+                    .expect("submission queue is full");
+            }
+
+            ring.submit_and_wait(1)?;
+
+            let cqe = ring.completion().next().expect("no cqe");
+            if cqe.user_data() == 0x42 {
+                let conn_fd = cqe.result();
+                if conn_fd >= 0 {
+                    let stream = unsafe { TcpStream::from_raw_fd(conn_fd) };
+                    uring_handle_tls(stream, tls_config.clone());
+                }
+            }
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    pub fn run(&self, thread: usize) -> std::io::Result<()> {
+        self.run_mio(thread)
+    }
     // spawn a task for each connection; this task will start a new task for each stream (if it's a websocket or webtransport)
     fn run_mio(&self, thread: usize) -> std::io::Result<()> {
+        let me = &self.worker[thread];
         use socket2::{Domain, Socket, Type};
 
         let addr: SocketAddr = self.config.host.parse().unwrap();
@@ -129,7 +167,7 @@ impl Server {
 
         let mut events = Events::with_capacity(2048);
         let mut clients: Slab<TlsClient> = Slab::with_capacity(1024);
-        let mut next_token = Token(SERVER_TOKEN.0 + 1);
+        //let mut next_token = Token(SERVER_TOKEN.0 + 1);
 
         println!("TLS server listening on https://{}", addr);
 

@@ -1,5 +1,4 @@
-
-fn handle_tls(mut stream: TcpStream, tls_config: Arc<ServerConfig>) {
+pub fn uring_handle_tls(mut stream: TcpStream, tls_config: Arc<ServerConfig>) {
     let conn = ServerConnection::new(tls_config).unwrap();
     let mut tls = StreamOwned::new(conn, stream);
 

@@ -1,21 +1,4 @@
-use mio::net::{TcpListener, TcpStream};
-use mio::{Events, Interest, Poll, Token};
-use rustls::{ServerConfig, ServerConnection, StreamOwned};
-
-use simpleweb::server::init_server;
-use simpleweb::tls::{load_tls_config, TlsClient};
-use slab::Slab;
-use std::collections::{HashMap, VecDeque};
-use std::fs::File;
-use std::future::Future;
-use std::io::{Read, Write};
-use std::net::SocketAddr;
-use std::pin::Pin;
-use std::sync::Arc;
-
-use std::task::{Context, RawWaker, RawWakerVTable, Waker};
-
-
+use simpleweb::server::{init_server, MyConfig};
 
 // each worker thread has its own executor. No stealing/helping.
 
@@ -29,45 +12,47 @@ pub fn main() {
     server.join();
 }
 
-fn dummy_waker() -> Waker {
-    fn no_op(_: *const ()) {}
-    fn clone(_: *const ()) -> RawWaker {
-        RawWaker::new(std::ptr::null(), &VTABLE)
-    }
+// I should put some rpcs here so it looks like a host example
 
-    static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, no_op, no_op, no_op);
+// fn dummy_waker() -> Waker {
+//     fn no_op(_: *const ()) {}
+//     fn clone(_: *const ()) -> RawWaker {
+//         RawWaker::new(std::ptr::null(), &VTABLE)
+//     }
 
-    unsafe { Waker::from_raw(RawWaker::new(std::ptr::null(), &VTABLE)) }
-}
+//     static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, no_op, no_op, no_op);
 
-use std::sync::Mutex;
+//     unsafe { Waker::from_raw(RawWaker::new(std::ptr::null(), &VTABLE)) }
+// }
 
-// each function in the vtable can
-fn make_waker(index: usize, thread: usize) -> Waker {
-    unsafe fn clone(ptr: *const ()) -> RawWaker {
-        RawWaker::new(ptr, &VTABLE)
-    }
+// use std::sync::Mutex;
 
-    unsafe fn wake(ptr: *const ()) {
-        get_server().wake(ptr);
-    }
+// // each function in the vtable can
+// fn make_waker(index: usize, thread: usize) -> Waker {
+//     unsafe fn clone(ptr: *const ()) -> RawWaker {
+//         RawWaker::new(ptr, &VTABLE)
+//     }
 
-    unsafe fn wake_by_ref(ptr: *const ()) {
-        get_server().wake(ptr);
-    }
+//     unsafe fn wake(ptr: *const ()) {
+//         get_server().wake(ptr);
+//     }
 
-    unsafe fn drop(ptr: *const ()) {
-        // get_server().drop(ptr);
-    }
+//     unsafe fn wake_by_ref(ptr: *const ()) {
+//         get_server().wake(ptr);
+//     }
 
-    static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, wake, wake_by_ref, drop);
+//     unsafe fn drop(ptr: *const ()) {
+//         // get_server().drop(ptr);
+//     }
 
-    let v = (thread << 24) + index;
-    let raw = RawWaker::new(v as *const (), &VTABLE);
-    unsafe { Waker::from_raw(raw) }
-}
+//     static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, wake, wake_by_ref, drop);
 
-pub async fn handle_connection(thread: usize, connection: usize) {
-    let buf = [0u8; 1024];
-    let n = get_server().read_some(thread, connection, &buf).await;
-}
+//     let v = (thread << 24) + index;
+//     let raw = RawWaker::new(v as *const (), &VTABLE);
+//     unsafe { Waker::from_raw(raw) }
+// }
+
+// pub async fn handle_connection(thread: usize, connection: usize) {
+//     let buf = [0u8; 1024];
+//     let n = get_server().read_some(thread, connection, &buf).await;
+// }
