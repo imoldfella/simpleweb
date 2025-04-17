@@ -2,6 +2,7 @@ use mio::net::{TcpListener, TcpStream};
 use mio::{Events, Interest, Poll, Token};
 use rustls::{ServerConfig, ServerConnection, StreamOwned};
 
+use simpleweb::server::init_server;
 use simpleweb::tls::{load_tls_config, TlsClient};
 use slab::Slab;
 use std::collections::{HashMap, VecDeque};
@@ -17,7 +18,6 @@ use std::task::{Context, RawWaker, RawWakerVTable, Waker};
 const SERVER_TOKEN: Token = Token(0);
 
 // each worker thread has its own executor. No stealing/helping.
-
 
 pub fn main() {
     let config = MyConfig {

@@ -1,3 +1,5 @@
+#![cfg(target_os = "linux")]
+
 use std::fs::File;
 use std::io::{BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -7,7 +9,6 @@ use std::sync::Arc;
 use io_uring::{opcode, types, IoUring};
 use rustls::{ServerConfig, ServerConnection, StreamOwned};
 use rustls_pemfile::{certs, pkcs8_private_keys};
-
 
 pub fn load_tls_config() -> Arc<ServerConfig> {
     use rustls::pki_types::{CertificateDer, PrivateKeyDer};

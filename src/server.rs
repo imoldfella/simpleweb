@@ -1,3 +1,9 @@
+use std::sync::Arc;
+
+use rustls::ServerConfig;
+
+use crate::thread::WorkerThread;
+
 pub struct MyConfig {
     threads: usize,
     host: String,
