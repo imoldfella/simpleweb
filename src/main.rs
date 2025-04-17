@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use std::task::{Context, RawWaker, RawWakerVTable, Waker};
 
-const SERVER_TOKEN: Token = Token(0);
+
 
 // each worker thread has its own executor. No stealing/helping.
 
