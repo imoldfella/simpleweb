@@ -6,6 +6,7 @@ pub fn main() {
     let config = MyConfig {
         host: "127.0.0.1:8321".to_string(),
         threads: 1,
+        .. MyConfig::default()
     };
 
     let mut server = init_server(config);

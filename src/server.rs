@@ -1,11 +1,13 @@
+
 use std::{future::Future, net::SocketAddr, pin::Pin, sync::Arc};
 
-use mio::{net::TcpListener, Events, Interest, Poll, Token};
+use mio::{net::{TcpListener, UdpSocket}, Events, Interest, Poll, Token};
 use rustls::ServerConfig;
 use slab::Slab;
 
 use crate::tls::TlsClient;
-const SERVER_TOKEN: Token = Token(0);
+const SERVER_TOKEN: Token = Token(usize::MAX);
+const UDP_TOKEN: Token = Token(usize::MAX - 1);
 
 pub struct MyConfig {
     pub threads: usize,
@@ -38,7 +40,7 @@ impl WorkerThread {}
 
 pub struct Server {
     // one entry for each socket, lets us steal from a thread that's on the same socket.
-    cpu_socket: Vec<(usize, usize)>,
+    cores_per_socket: usize,
     config: MyConfig,
     worker: Box<[WorkerThread]>,
     tls_config: Arc<ServerConfig>,
@@ -72,6 +74,14 @@ impl Supervisor {
 }
 
 impl Server {
+    pub fn get_same_cpu(&self, thread: usize) -> std::ops::Range<usize> {
+        // this is a range of worker threads that share the same CPU socket
+        // we can steal tasks from these threads
+        let cpu_socket = thread / self.cores_per_socket;
+        let start = cpu_socket * self.cores_per_socket;
+        let end = start + self.cores_per_socket;
+        start..end
+    }
     // every read is going to return a boxed future? lots of allocations.
     pub fn read_some(
         &self,
@@ -93,10 +103,11 @@ impl Server {
             .collect::<Vec<_>>()
             .into_boxed_slice();
 
-        let cpu_socket = vec![(0 as usize, config.threads)];
+   
         let tls_config = crate::crypto::pki::load_tls_config();
         let o = Server {
-            cpu_socket,
+            // for now assume one cpu socket.
+            cores_per_socket: config.threads,
             config,
             worker,
             tls_config,
@@ -120,7 +131,7 @@ impl Server {
             return self.run_mio(thread);
         }
         let mut ring = ring.unwrap();
-        let listener = std::net::TcpListener::bind("127.0.0.1:8443")?;
+        let listener = std::net::TcpListener::bind(self.config.host)?;
         let fd = listener.as_raw_fd();
 
         listener.set_nonblocking(true)?;
@@ -154,7 +165,10 @@ impl Server {
     }
     // spawn a task for each connection; this task will start a new task for each stream (if it's a websocket or webtransport)
     fn run_mio(&self, thread: usize) -> std::io::Result<()> {
-        let me = &self.worker[thread];
+        use std::io::ErrorKind::WouldBlock;
+        use std::io::ErrorKind::Interrupted;
+
+        _  = &self.worker[thread];
         use socket2::{Domain, Socket, Type};
 
         let addr: SocketAddr = self.config.host.parse().unwrap();
@@ -163,11 +177,18 @@ impl Server {
         socket.bind(&addr.into())?;
         socket.listen(128)?;
         let mut listener = TcpListener::from_std(socket.into());
+        let mut udp_socket = UdpSocket::bind(addr)?;
+
 
         let mut poll = Poll::new()?;
         poll.registry()
             .register(&mut listener, SERVER_TOKEN, Interest::READABLE)?;
-
+        poll.registry().register(
+            &mut udp_socket,
+            UDP_TOKEN,
+            Interest::READABLE.add(Interest::WRITABLE),
+        )?;
+        
         let mut events = Events::with_capacity(2048);
         let mut clients: Slab<TlsClient> = Slab::with_capacity(1024);
         //let mut next_token = Token(SERVER_TOKEN.0 + 1);
@@ -177,13 +198,23 @@ impl Server {
         loop {
             match poll.poll(&mut events, None) {
                 Ok(_) => {}
-                Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(ref e) if e.kind() == Interrupted => continue,
                 Err(e) => return Err(e),
             }
 
             for event in events.iter() {
                 println!("Got event: {:?}", event);
                 match event.token() {
+                    UDP_TOKEN => {
+                        let mut buf = [0u8; 1500];
+                        match udp_socket.recv_from(&mut buf) {
+                            Ok((len, src)) => {
+                                // Process incoming QUIC packet, etc.
+                            }
+                            Err(ref e) if e.kind() == WouldBlock => {}
+                            Err(e) => return Err(e),
+                        }
+                    },
                     SERVER_TOKEN => match listener.accept() {
                         Ok((mut stream, addr)) => {
                             println!("Accepted connection from {}", addr);
@@ -197,13 +228,15 @@ impl Server {
                             let client = TlsClient::new(stream, self.tls_config.clone());
                             entry.insert(client);
                         }
-                        Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => break,
-                        Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                        Err(ref e) if e.kind() == Interrupted => break,
+                        Err(ref e) if e.kind() == WouldBlock => break,
                         Err(e) => return Err(e),
                     },
+
+                    // the 
                     token => {
                         println!("Token {}", token.0);
-                        if let Some(mut client) = clients.get_mut(token.0) {
+                        if let Some(client) = clients.get_mut(token.0) {
                             let keep = match client.ready() {
                                 Ok(keep) => keep,
                                 Err(_) => false,

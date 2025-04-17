@@ -25,9 +25,9 @@ pub fn uring_handle_tls(mut stream: TcpStream, tls_config: Arc<ServerConfig>) {
     }
 }
 
-pub fn web_hello() -> std::io::Result<()> {
+pub fn web_hello(addr: String) -> std::io::Result<()> {
     let tls_config = load_tls_config();
-    let listener = TcpListener::bind("127.0.0.1:8443")?;
+    let listener = TcpListener::bind(addr)?;
     listener.set_nonblocking(true)?;
 
     let mut ring = IoUring::new(8)?;
