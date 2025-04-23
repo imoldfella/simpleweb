@@ -150,6 +150,7 @@ impl Server {
                     .expect("submission queue is full");
             }
 
+            // this isn't useful; we need to replace this.
             ring.submit_and_wait(1)?;
 
             let cqe = ring.completion().next().expect("no cqe");
