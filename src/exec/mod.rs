@@ -49,6 +49,6 @@ impl Os {
 
 pub async fn some_fn(os: Os) -> CountResult {
     let buf = vec![0; 1024];
-    let result = os.read_some(&[]).await;
+    let result = os.read_some(0, &[]).await;
     result
 }
