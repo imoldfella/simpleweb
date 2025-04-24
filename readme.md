@@ -90,3 +90,6 @@ should tokens allow restriction on table.attribute, eg spend.amount < 5000. This
 problem of leakage - If I write with my id, I can see that the key exists. A partial solution is to use automatic row ids as the primary key. then the real primary key is (partition, rowid). equivalently the partition is always considered part of the primary key.
 
 special token to allow querying the token table
+
+maybe have a process id in each rpc stream? it could be associated with the connection, but then we would need an extra connection if we wanted to have multiple processes.
+
