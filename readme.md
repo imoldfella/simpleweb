@@ -59,3 +59,34 @@ being able to create a secured schema, not just a function set, is ideal; allows
 you should only be able read and write tuples that you have a capability for. 
 
 
+a connection is a process, we inject schema partitions (tokens) into the process.
+
+1. Each schema has a set of tokens. Each token stores the user, a partition id, a parent token, and restrictions. Tokens are created immutably, they can be revoked by the owner or the owner of a parent token. There is a set of root tokens for the schema, thus the schema creator(s) can revoke any token in the schema. 
+2. Every tuple has a partition id as part of its primary key. You can read the tuple if you have a read token, you can delete or insert the tuple if you have a write token. 
+3. after creating a connection, the user must inject appropriate tokens before calling procedures. 
+4. tokens can be queried from a read only system table. Users can query their own tokens and descendants of those tokens. 
+5. stored procedures are associated with orthogonal partitions; a partition of stored procedures is called an interface. Stored procedure tokens can be restricted to a subset of read/write/execute. Stored procedures may execute with tokens of their own that are stored when they are created.
+   
+
+QA
+How are tokens expired or garbage collected? 
+Tokens may have indefinite lifetime. The capability formed from injecting it into the connection is deleted when the connection is closed. Tokens may be restricted to device, location, time range, date range, these restrictions are checked when inserting into the connection and if accepted the connection is then limited by the intersection of these restrictions.
+
+How are token uses logged?
+Tokens inserted into the connection are logged as part of the connection logging; you can recover the database to any point in time, thus storing the query (or DML) and the timestamp allows recovery of who viewed or modified which tuples.
+
+
+Write tokens allow insert/delete — but what if a user has a write token for partition X, and inserts data “on behalf of” someone else?
+The tuple must be inserted into a partition. There is no way to insert something on behalf of someone else. The logs will always track back to to the inserting user. An application level field could be used to record the intent.
+
+Is the partition_id auto-filled, or must it be enforced during INSERT?
+Autofilling is left for future work, for this proposal it must be provided with every DML statement as part of the primary key.
+
+
+future work?
+should tokens allow restriction on table.attribute, eg spend.amount < 5000. This can be worked around with stored procedures.
+
+
+problem of leakage - If I write with my id, I can see that the key exists. A partial solution is to use automatic row ids as the primary key. then the real primary key is (partition, rowid). equivalently the partition is always considered part of the primary key.
+
+special token to allow querying the token table
