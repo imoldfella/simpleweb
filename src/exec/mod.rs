@@ -6,9 +6,8 @@ use std::{
 
 //static mut IS_URING : bool = false;
 
-pub struct ConnectionInner {
-}
-pub struct Connection{
+pub struct ConnectionInner {}
+pub struct Connection {
     inner: *mut ConnectionInner,
 }
 
@@ -61,7 +60,7 @@ pub async fn some_fn(os: Os, connection: Connection) -> CountResult {
 
 // an rpc will have some number of blobs; the final blob is the parameter block.
 // the initial blobs maybe stored to disk depending on memory pressure.
-// 
+//
 pub async fn read_rpc(os: Os, connection: Connection) -> CountResult {
     let buf = vec![0; 1024];
     let result = os.read_some(connection, &buf).await;
@@ -74,3 +73,7 @@ pub async fn read_rpc(os: Os, connection: Connection) -> CountResult {
 // buffers in connection cost for idle connections.
 // in the common case we want to convert to page aligned buffers (from net) and from these buffers to net.
 // get a network buffer, copy into it, release it to the nic.
+// when sending back, we can use the same strategy.
+
+// option 1 - all blobs in single extent; updates can append? toast is similar. mac forks?
+// option 2 - blobs in their own extent.
