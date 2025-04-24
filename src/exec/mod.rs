@@ -6,10 +6,29 @@ use std::{
 
 //static mut IS_URING : bool = false;
 
+pub struct ConnectionInner {}
+pub struct Connection {
+    inner: *mut ConnectionInner,
 pub struct ConnectionInner {
 }
+
+pub enum ConnectionType {
+    Udp,
+    Tcp,
+}
+
+pub struct User {
+}
+
+
 pub struct Connection{
-    inner: *mut ConnectionInner,
+    pub inner: *mut ConnectionInner,
+    pub connection_type: ConnectionType,
+    pub user: u32,
+
+    // authorize connection, allows other rules than simply user (location, time)
+    pub interface: heapless::Vec<u32, 100>,
+  
 }
 
 pub struct CountFuture {}
@@ -95,3 +114,13 @@ pub async fn read_rpc(os: Os, connection: Connection) -> CountResult {
 // buffers in connection cost for idle connections.
 // in the common case we want to convert to page aligned buffers (from net) and from these buffers to net.
 // get a network buffer, copy into it, release it to the nic.
+<<<<<<< Updated upstream
+// when sending back, we can use the same strategy.
+
+// option 1 - all blobs in single extent; updates can append? toast is similar. mac forks?
+// option 2 - blobs in their own extent.
+=======
+
+// the websocket adapter is odd because it has no stream id per packet, or do we force messages to be packets?
+
+>>>>>>> Stashed changes
