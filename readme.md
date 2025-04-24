@@ -93,3 +93,7 @@ special token to allow querying the token table
 
 maybe have a process id in each rpc stream? it could be associated with the connection, but then we would need an extra connection if we wanted to have multiple processes.
 
+start with environment id:16, interface handle:16, proc id:32.
+
+not worth the effort? we could have varlen ids in the header, then use first fit for parameters? nah.
+
