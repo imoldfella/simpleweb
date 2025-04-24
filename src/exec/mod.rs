@@ -6,8 +6,9 @@ use std::{
 
 //static mut IS_URING : bool = false;
 
-pub struct ConnectionInner {}
-pub struct Connection {
+pub struct ConnectionInner {
+}
+pub struct Connection{
     inner: *mut ConnectionInner,
 }
 
@@ -50,6 +51,27 @@ impl Os {
     ) -> Pin<Box<dyn Future<Output = CountResult>>> {
         Box::pin(CountFuture {})
     }
+
+    
+    pub fn request(&self, connection: Connection, streamid: u64,  buf: &[u8], complete: bool) {
+        // the first packet in a stream must be at least 8 bytes, (aside from the stream id in the header)
+        // probably don't need to check here?
+        if buf.len() < 8 {
+           self.result_error(connection, streamid, -1);
+           return;
+        }
+        // read 4 byte little endian schema and 4 byte little endian procid
+        let interface_handle = u32::from_le_bytes(buf[0..4].try_into().unwrap());
+        let procid = u32::from_le_bytes(buf[4..8].try_into().unwrap());
+        // return error is schema.procid is not authorized.
+
+    }
+    
+    pub fn result_error(&self, connection: Connection, streamid: u64, error: i32) {
+    }
+    pub fn result(&self, connection: Connection, streamid: u64, buf: &[u8], complete: bool) {
+        // the first packet in a stream must be at least 8 bytes, (aside from the stream id in the header)
+    }
 }
 
 pub async fn some_fn(os: Os, connection: Connection) -> CountResult {
@@ -73,7 +95,3 @@ pub async fn read_rpc(os: Os, connection: Connection) -> CountResult {
 // buffers in connection cost for idle connections.
 // in the common case we want to convert to page aligned buffers (from net) and from these buffers to net.
 // get a network buffer, copy into it, release it to the nic.
-// when sending back, we can use the same strategy.
-
-// option 1 - all blobs in single extent; updates can append? toast is similar. mac forks?
-// option 2 - blobs in their own extent.
