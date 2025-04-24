@@ -42,3 +42,20 @@ trait WebTransportProcessor
 
 maybe with config we have different futures for the uring or mio reactor.
 
+
+how to define interfaces?
+
+partition sets, tokens.
+
+
+get_token('schema.set', 'name') -> once we have a token we can use it an token field.
+create_token('schema.set', 'name', 'from', restrictions)
+-- implies that we coul
+grant_token('schema.set', 'name', user[]) 
+revoke_token('schema.set', 'name', )
+
+being able to create a secured schema, not just a function set, is ideal; allows fluidity for guis.
+
+you should only be able read and write tuples that you have a capability for. 
+
+

@@ -23,6 +23,7 @@ log = "*"
 env_logger = "0.11.8"
 url = "*"
 octets = "*"
+heapless = "*"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 io-uring = "*"
