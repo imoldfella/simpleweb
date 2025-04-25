@@ -105,7 +105,8 @@ the thread could then commit its actual memory to mmap as needed.
 
 if it runs out of memory it can suspend a connection, and even swap it to disk.
 
-one downside is that every madvise comes a shootdown.
+one downside is that every madvise comes a shootdown. exmap shows a way to have no shootdowns on allocation, and to batch shootdowns on free. claim is that they read protect the evicted page - but why doesn't this require a shootdown?
+eviction does do a shootdown. when allocating, the other cores don't necessarily see the new page right away, but they won't get accidental access to the old page.
 
 another downside is repurposing to wasm.
 
@@ -121,3 +122,25 @@ what if we have a webassembly module (with its own memory) for each strand?
 
 the worker is the thread, and it schedules to different wasm images.
 It can throw away entire strands.
+
+option 1: Strand holds the memory; it can grow and shrink using vm
+
+option 2: statements hold (most) memory, the statement memory can grow or shrink. statement releases its memory block back to a pool when it completes, the strand gets another one when it begins a new statement.
+
+
+
+# open transactions
+Generally a network round trip should not be inside a transaction, but it could have uses. Transactions can be autocommit = true|false.
+
+stream header = (environment, interface, procedure, continues)
+if continues = 0 then use autocommit
+if continues = 1 then the first statement returns a continuation handle.
+else continues is the continuation handle.
+
+the final commit or roll back can be a special interface/procedure.
+
+aside: we really only need interface and procedure in the header, giving us the schema of the parameter block. the other things (environment, continues) could be normally fit in the parameter block.
+
+client sends versions it can speak, server picks one.
+
+we can probably allocate all the memory from the thread that owns the transaction, then use helper tasks to manipulate that memory. many algorithms take advantage of local memory, maybe we need a thread scratchspace for tasks that won't be interrupted.

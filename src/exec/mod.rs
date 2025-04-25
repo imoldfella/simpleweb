@@ -167,7 +167,8 @@ impl Db {
             .get(procid as usize)
             .ok_or(DbError::InvalidArgument)?;
 
-        let fut = proc();
+        // we need to execute the procedure in a transaction, allocate its memory there.
+        let fut = (*proc)();
 
         self.spawn(thread, connection, proc, buf, complete)
 
