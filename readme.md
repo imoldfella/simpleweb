@@ -144,3 +144,63 @@ aside: we really only need interface and procedure in the header, giving us the 
 client sends versions it can speak, server picks one.
 
 we can probably allocate all the memory from the thread that owns the transaction, then use helper tasks to manipulate that memory. many algorithms take advantage of local memory, maybe we need a thread scratchspace for tasks that won't be interrupted.
+
+# host udfs and stored procedures
+udfs: natively vector, arrow.
+
+stored procedures.
+
+host:
+  register_procedure(
+     "schema.interface.name",
+     callback
+  )
+
+  maybe there should be a pipe instead of a callback, go does not like callbacks.
+
+  if we model after io uring we have 
+
+  submit_and_wait() // wait for cqe.
+
+  does this work well for go? we are blocking a thread, but we only do this when there isn't anything to do?
+
+
+ main ( ) {
+
+var dispatch = map[string]func(args ...interface{}) error {
+    "start": startHandler,
+    "stop": stopHandler,
+    "restart": restartHandler,
+}
+
+    db := initialize_database(config, dispatch )    
+
+the stored procedure should get some basic handles to the transaction?
+
+
+
+what about just using the database directly, as if over web sockets, but without callbacks?
+
+we probably want a preprocessor for most things.
+
+
+
+   any go routine 
+
+      let stmt = mod.prepare(db);
+      
+
+      ( result, error, continue) := stmt.some_call(1,tx, more args...);
+      // do something with result while holding locks.
+      // now commit
+      ( result, error, _) =  stmt.another_call(continue+1, ...);
+
+      
+      stmt[0](tx, ); // variadic?
+
+      tx.commit();
+
+      another way to do it would be to buffer one statement ahead until commit? you can't because by definition you need the result.
+
+      what about sending a stream (reader?) as an argument? this could be an annotation in the preprocessor.
+

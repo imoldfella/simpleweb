@@ -56,14 +56,26 @@ pub struct Connection {
 }
 
 pub struct Db {
+    // is it plausible to have users assigned to a thread? the problem is that the user does not show up in source. we could potentially have multiple ports and then webtransport to the port that the user is assigned to. CID, but only with quic, user routing to port, but makes deployment more complex.
     pub user: Box<[User]>,
     pub iface: Box<[Iface]>,
     pub thread: Box<[Thread]>,
-    pub env: Box<[Environment]>,
+
+}
+
+
+pub struct Statement {
+    // pub proc: Box<[Proc]>,
+    // pub env: Box<[Environment]>,
+    // pub thread: Box<[Thread]>,
+    // pub connection: Box<[Connection]>,
+    // pub strand: Box<[Strand]>,
 }
 pub struct Thread {
     is_uring: bool,
     pub connection: Box<[Connection]>,
+    pub env: Box<[Environment]>,
+    pub statement: Box<[Statement]>,
 }
 
 pub struct CountFuture {}
@@ -142,13 +154,18 @@ impl Db {
         // read 4 byte little endian environment and 4 byte little endian procid
         let env = read_u16(buf, 0..2)?;
         let iface = read_u16(buf, 2..4)?;
-        let procid = read_u32(buf, 4..8)?;
+        let procid = read_u16(buf, 4..6)?;
+        let continues = read_u16(buf, 6..8)?;
+        // continues = 0 means that this statement is autocommit; when the stream is closed, the transaction is committed or rolled back.
+        // continues = 1 means that this is the first statement of a transaction. the return value of the first statement will include a handle that allows the transaction to be continued with an additional stream.
+        // note that waiting for this continuation handle is intentional; if you don't need to wait, just make a more complex statement.
+        // the server will only return even handles. Set the low bit of the handle to indicate that the transaction is complete.
 
         let env = connection
             .env
             .get(env as usize)
             .ok_or(DbError::InvalidArgument)?;
-        let env = self
+        let env = thread
             .env
             .get(*env as usize)
             .ok_or(DbError::InvalidArgument)?;
