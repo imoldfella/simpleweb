@@ -97,3 +97,27 @@ start with environment id:16, interface handle:16, proc id:32.
 
 not worth the effort? we could have varlen ids in the header, then use first fit for parameters? nah.
 
+for a server using vm for memory management is the way?
+
+a large memory area could be associated with the connection (and the number of connections per thread could be fixed at a high number).
+
+the thread could then commit its actual memory to mmap as needed.
+
+if it runs out of memory it can suspend a connection, and even swap it to disk.
+
+one downside is that every madvise comes a shootdown.
+
+another downside is repurposing to wasm.
+
+in wasm maybe there is a single connection and a single environment, so there is nothing to steal memory from anyway.
+
+does it make sense to have multiple strands inside an environment? each strand is a series of transactions.
+
+maybe in wasm we resort to killing transactions when we run out of memory.
+we could do that on the server.
+
+Can we use wasm itself to model the strands, and then we have a form of vm?
+what if we have a webassembly module (with its own memory) for each strand?
+
+the worker is the thread, and it schedules to different wasm images.
+It can throw away entire strands.
