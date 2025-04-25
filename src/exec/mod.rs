@@ -1,5 +1,8 @@
 use std::{
-    future::Future, ops::Deref, pin::Pin, task::{Context, Poll}
+    future::Future,
+    ops::Deref,
+    pin::Pin,
+    task::{Context, Poll},
 };
 
 use env_logger::Env;
@@ -25,9 +28,13 @@ pub enum ConnectionType {
 
 pub struct User {}
 
-
 // we could restrict to environment, but passing the extra arguments allows them to stay in registers
-type Proc = fn(env: Ptr<Environment>,db: Ptr<Db>,  thr: Ptr<Thread>, cn: Ptr<Connection>) -> u32;
+type Proc = fn(
+    env: Ptr<Environment>,
+    db: Ptr<Db>,
+    thr: Ptr<Thread>,
+    cn: Ptr<Connection>,
+) -> Pin<Box<dyn Future<Output = OkResult>>>;
 // should we share these globally and deal with locks?
 // should we compile procedures dynamically or AOT?
 pub struct Iface {
@@ -45,17 +52,18 @@ pub struct Connection {
     pub user: u32,
 
     // authorize connection, allows other rules than simply user (location, time)
-    pub env: Box<[Environment]>,
+    pub env: Box<[u32]>,
 }
 
 pub struct Db {
     pub user: Box<[User]>,
     pub iface: Box<[Iface]>,
     pub thread: Box<[Thread]>,
+    pub env: Box<[Environment]>,
 }
 pub struct Thread {
     is_uring: bool,
-    pub connection: Box<[Connection]>, 
+    pub connection: Box<[Connection]>,
 }
 
 pub struct CountFuture {}
@@ -76,14 +84,10 @@ impl Future for CountFuture {
     }
 }
 
-
-
 // how should we code routines? pass thread explicitly, or use thread local storage?
 
 #[derive(Debug, thiserror::Error)]
 pub enum DbError {
-
-
     #[error("I/O error")]
     Io(#[from] std::io::Error),
 
@@ -107,42 +111,68 @@ impl Thread {
     }
 }
 fn read_u16(input: &[u8], range: std::ops::Range<usize>) -> Result<u16, DbError> {
-    input.get(range)
-         .and_then(|s| s.try_into().ok())
-         .map(u16::from_le_bytes)
-         .ok_or(DbError::InvalidArgument)
+    input
+        .get(range)
+        .and_then(|s| s.try_into().ok())
+        .map(u16::from_le_bytes)
+        .ok_or(DbError::InvalidArgument)
 }
 
 fn read_u32(input: &[u8], range: std::ops::Range<usize>) -> Result<u32, DbError> {
-    input.get(range)
-         .and_then(|s| s.try_into().ok())
-         .map(u32::from_le_bytes)
-         .ok_or(DbError::InvalidArgument)
+    input
+        .get(range)
+        .and_then(|s| s.try_into().ok())
+        .map(u32::from_le_bytes)
+        .ok_or(DbError::InvalidArgument)
 }
 impl Db {
-
-    pub fn request(&self, thread: Ptr<Thread>, connection: Connection, streamid: u64, buf: &[u8], complete: bool) -> DbResult<()> {
+    pub fn request(
+        &self,
+        thread: Ptr<Thread>,
+        connection: Ptr<Connection>,
+        streamid: u64,
+        buf: &[u8],
+        complete: bool,
+    ) -> DbResult<()> {
         // the first packet in a stream must be at least 8 bytes, (aside from the stream id in the header)
         // probably don't need to check here?
         if buf.len() < 8 {
-            return Err(DbError::InvalidArgument); 
+            return Err(DbError::InvalidArgument);
         }
         // read 4 byte little endian environment and 4 byte little endian procid
         let env = read_u16(buf, 0..2)?;
         let iface = read_u16(buf, 2..4)?;
         let procid = read_u32(buf, 4..8)?;
 
-        let env = self.env.get(env as usize).map(|| DbError::InvalidArgument)?;
-        let interface = connection.interface[interface_handle as usize];
-        if interface == 0 {
-            thread.result_error(connection, streamid, -1);
-            return;
-        }
+        let env = connection
+            .env
+            .get(env as usize)
+            .ok_or(DbError::InvalidArgument)?;
+        let env = self
+            .env
+            .get(*env as usize)
+            .ok_or(DbError::InvalidArgument)?;
+
+        let interface = env
+            .iface
+            .get(iface as usize)
+            .ok_or(DbError::InvalidArgument)?;
+        let interface = self
+            .iface
+            .get(*interface as usize)
+            .ok_or(DbError::InvalidArgument)?;
+
+        let proc = interface
+            .proc
+            .get(procid as usize)
+            .ok_or(DbError::InvalidArgument)?;
+
+        let fut = proc();
+
+        self.spawn(thread, connection, proc, buf, complete)
 
         // return error is schema.procid is not authorized.
     }
-
-
 }
 
 pub async fn some_fn(os: Thread, connection: Connection) -> CountResult {
