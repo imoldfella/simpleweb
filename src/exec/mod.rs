@@ -167,6 +167,7 @@ fn read_u32(input: &[u8], range: std::ops::Range<usize>) -> Result<u32, DbError>
 
 impl Db {
 
+    // we don't know when we get the first packet of a stream in quic, we have to look in a map to see if we have an existing stream.
     pub fn handle_read(
         &self,
         thread: Ptr<Thread>,
