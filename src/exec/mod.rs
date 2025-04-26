@@ -14,6 +14,26 @@ use env_logger::Env;
 pub struct Ptr<T> {
     ptr: *mut T,
 }
+impl<T> Copy for Ptr<T> {}
+impl<T> Clone for Ptr<T> {
+    fn clone(&self) -> Self {
+        Self { ptr: self.ptr }
+    }
+}
+impl<T> Ptr<T> {
+    // pub fn new(ptr: *mut T) -> Self {
+    //     Self { ptr }
+    // }
+    pub fn new(slice: &[T], index: usize) -> Result<Ptr<T>, DbError> {
+        if index >= slice.len() {
+            return Err(DbError::InvalidArgument);
+        }
+        let ptr = slice.as_ptr() as *mut T;
+        Ok(Self {
+            ptr: unsafe { ptr.add(index) },
+        })
+    }
+}
 impl<T> Deref for Ptr<T> {
     type Target = T;
     fn deref(&self) -> &Self::Target {
@@ -29,12 +49,16 @@ pub enum ConnectionType {
 pub struct User {}
 
 // we could restrict to environment, but passing the extra arguments allows them to stay in registers
+
+// we should probably take an arena as an argument, to allocate the pin future in it.
+// we want to allocate the transaction procedure inside the memory pool of the transaction.
+// where do helper tasks allocate in?
 type Proc = fn(
     env: Ptr<Environment>,
     db: Ptr<Db>,
     thr: Ptr<Thread>,
     cn: Ptr<Connection>,
-) -> Pin<Box<dyn Future<Output = OkResult>>>;
+) -> Pin<Box<dyn Future<Output = ()>>>;
 // should we share these globally and deal with locks?
 // should we compile procedures dynamically or AOT?
 pub struct Iface {
@@ -60,9 +84,7 @@ pub struct Db {
     pub user: Box<[User]>,
     pub iface: Box<[Iface]>,
     pub thread: Box<[Thread]>,
-
 }
-
 
 pub struct Statement {
     // pub proc: Box<[Proc]>,
@@ -109,6 +131,10 @@ pub enum DbError {
 type DbResult<T> = std::result::Result<T, DbError>;
 
 impl Thread {
+    pub fn spawn(&self, fut: Pin<Box<dyn Future<Output = ()>>>) {
+        // spawn the future on the thread
+        // this is a no-op for now
+    }
     pub fn read_some(
         &self,
         connection: Connection,
@@ -156,39 +182,44 @@ impl Db {
         let iface = read_u16(buf, 2..4)?;
         let procid = read_u16(buf, 4..6)?;
         let continues = read_u16(buf, 6..8)?;
+        let will_continue = continues & 1;
         // continues = 0 means that this statement is autocommit; when the stream is closed, the transaction is committed or rolled back.
         // continues = 1 means that this is the first statement of a transaction. the return value of the first statement will include a handle that allows the transaction to be continued with an additional stream.
         // note that waiting for this continuation handle is intentional; if you don't need to wait, just make a more complex statement.
-        // the server will only return even handles. Set the low bit of the handle to indicate that the transaction is complete.
+        // the server will only return even handles. Set the low bit (+1) of the handle to indicate that the transaction is continuing.
 
+        // indirect through the connection; the connection has dense vector that points to pool of envionments in the thread.
         let env = connection
             .env
             .get(env as usize)
             .ok_or(DbError::InvalidArgument)?;
-        let env = thread
-            .env
-            .get(*env as usize)
-            .ok_or(DbError::InvalidArgument)?;
+        let env = Ptr::new(&thread.env, *env as usize)?;
+
+        // .get(*env as usize)
+        // .ok_or(DbError::InvalidArgument)?;
 
         let interface = env
             .iface
             .get(iface as usize)
             .ok_or(DbError::InvalidArgument)?;
-        let interface = self
-            .iface
-            .get(*interface as usize)
-            .ok_or(DbError::InvalidArgument)?;
+        let interface = Ptr::new(&self.iface, *interface as usize)?;
+        // let interface = self
+        //     .iface
+        //     .get(*interface as usize)
+        //     .ok_or(DbError::InvalidArgument)?;
 
         let proc = interface
             .proc
             .get(procid as usize)
             .ok_or(DbError::InvalidArgument)?;
-
+        let dbp = Ptr {
+            ptr: self as *const _ as *mut _,
+        };
         // we need to execute the procedure in a transaction, allocate its memory there.
-        let fut = (*proc)();
+        let fut = (*proc)(env, dbp, thread, connection);
 
-        self.spawn(thread, connection, proc, buf, complete)
-
+        thread.spawn(fut);
+        std::result::Result::Ok(())
         // return error is schema.procid is not authorized.
     }
 }

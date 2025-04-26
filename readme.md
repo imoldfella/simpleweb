@@ -135,7 +135,7 @@ Generally a network round trip should not be inside a transaction, but it could 
 stream header = (environment, interface, procedure, continues)
 if continues = 0 then use autocommit
 if continues = 1 then the first statement returns a continuation handle.
-else continues is the continuation handle.
+else continues is the continuation handle, add 1 to continue again or send the handle (+0) to autocommit.
 
 the final commit or roll back can be a special interface/procedure.
 
