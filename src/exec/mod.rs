@@ -163,14 +163,18 @@ fn read_u32(input: &[u8], range: std::ops::Range<usize>) -> Result<u32, DbError>
         .map(u32::from_le_bytes)
         .ok_or(DbError::InvalidArgument)
 }
+
+
 impl Db {
-    pub fn request(
+
+    pub fn handle_read(
         &self,
         thread: Ptr<Thread>,
         connection: Ptr<Connection>,
         streamid: u64,
         buf: &[u8],
-        complete: bool,
+        first: bool,
+        last: bool,
     ) -> DbResult<()> {
         // the first packet in a stream must be at least 8 bytes, (aside from the stream id in the header)
         // probably don't need to check here?

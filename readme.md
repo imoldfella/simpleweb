@@ -204,3 +204,12 @@ we probably want a preprocessor for most things.
 
       what about sending a stream (reader?) as an argument? this could be an annotation in the preprocessor.
 
+// is there a need for sending a blob before we know the lenghth?
+// what would it look like?
+
+// in most cases we know the length, or the transaction needs to mutate a blob by appends. 
+
+option 1; start with tuple, follow with blobs
+option 2; start with blobs, follow with tuple.
+
+starting with the tuple potentially allows us to compile special support into the proc, but do we want that complication?
