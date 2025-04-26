@@ -1,11 +1,13 @@
 use std::{
+    collections::{hash_map::Entry, HashMap},
     future::Future,
-    ops::Deref,
+    ops::{Deref, DerefMut},
     pin::Pin,
     task::{Context, Poll},
 };
 
 use env_logger::Env;
+use rustls::pki_types::Der;
 
 // probably want something like dashmap but with more memory control
 
@@ -38,6 +40,11 @@ impl<T> Deref for Ptr<T> {
     type Target = T;
     fn deref(&self) -> &Self::Target {
         unsafe { &*self.ptr }
+    }
+}
+impl<T> DerefMut for Ptr<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        unsafe { &mut *self.ptr }
     }
 }
 
@@ -77,6 +84,8 @@ pub struct Connection {
 
     // authorize connection, allows other rules than simply user (location, time)
     pub env: Box<[u32]>,
+    pub statement: Box<[Statement]>,
+    pub stream: HashMap<u64, Ptr<Statement>>,
 }
 
 pub struct Db {
@@ -87,17 +96,17 @@ pub struct Db {
 }
 
 pub struct Statement {
-    // pub proc: Box<[Proc]>,
-    // pub env: Box<[Environment]>,
-    // pub thread: Box<[Thread]>,
-    // pub connection: Box<[Connection]>,
-    // pub strand: Box<[Strand]>,
+    // just a pointer to linked list of memory blocks?
+    // are we going to start the procedure before we have the whole statement?
+    // might need annotations for rolling back? 
 }
 pub struct Thread {
     is_uring: bool,
     pub connection: Box<[Connection]>,
     pub env: Box<[Environment]>,
     pub statement: Box<[Statement]>,
+
+
 }
 
 pub struct CountFuture {}
@@ -164,19 +173,29 @@ fn read_u32(input: &[u8], range: std::ops::Range<usize>) -> Result<u32, DbError>
         .ok_or(DbError::InvalidArgument)
 }
 
-
 impl Db {
-
     // we don't know when we get the first packet of a stream in quic, we have to look in a map to see if we have an existing stream.
     pub fn handle_read(
         &self,
-        thread: Ptr<Thread>,
+        mut thread: Ptr<Thread>,
         connection: Ptr<Connection>,
         streamid: u64,
         buf: &[u8],
         first: bool,
         last: bool,
     ) -> DbResult<()> {
+        let (stmt, first) =  match thread.stream.entry(streamid) {
+            Entry::Occupied(mut occ) => {
+                // Already existed
+                ( occ.get_mut(), false)
+                
+            }
+            Entry::Vacant(vac) => {
+                let o = Statement {};
+                vac.insert(o);
+                (o, true)
+            }
+        }
         // the first packet in a stream must be at least 8 bytes, (aside from the stream id in the header)
         // probably don't need to check here?
         if buf.len() < 8 {
