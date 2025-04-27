@@ -154,8 +154,8 @@ impl Thread {
         Box::pin(CountFuture {})
     }
     // maybe these should be on the connection? do they need the thread?
-    pub fn result_error(&self, connection: Connection, streamid: u64, error: i32) {}
-    pub fn result(&self, connection: Connection, streamid: u64, buf: &[u8], complete: bool) {
+    pub fn result_error(&self, connection: Ptr<Connection>, streamid: u64, error: i32) {}
+    pub fn result(&self, connection: Ptr<Connection>, streamid: u64, buf: &[u8], complete: bool) {
         // the first packet in a stream must be at least 8 bytes, (aside from the stream id in the header)
     }
 }
@@ -175,9 +175,18 @@ fn read_u32(input: &[u8], range: std::ops::Range<usize>) -> Result<u32, DbError>
         .ok_or(DbError::InvalidArgument)
 }
 
+// use this for recv -> send
 pub struct NetworkBuffer {
     ptr: *mut u8,
     len: usize,
+}
+impl NetworkBuffer {
+    pub fn len(&self) -> usize {
+        self.len
+    }
+    pub fn as_slice(&self) -> &[u8] {
+        unsafe { std::slice::from_raw_parts(self.ptr, self.len) }
+    }
 }
 impl Copy for NetworkBuffer {}
 impl Clone for NetworkBuffer {
@@ -188,40 +197,109 @@ impl Clone for NetworkBuffer {
         }
     }
 }
+#[repr(C)]
+pub struct StreamHeader {
+    env: u16,
+    iface: u16,
+    procid: u16,
+    continues: u16,
+}
+impl StreamHeader {
+    pub fn new(nb: &[u8]) -> Result<Self, DbError> {
+        let env = read_u16(nb, 0..2)?;
+        let iface = read_u16(nb, 2..4)?;
+        let procid = read_u16(nb, 4..6)?;
+        let continues = read_u16(nb, 6..8)?;
+        Ok(Self {
+            env,
+            iface,
+            procid,
+            continues,
+        })
+    }
+}
 
+// quic can pack multiple frames (multiple streams) into a packet on a connection. if we model this using websockets we could send multiple rpcs in a single websocket frame. 
+// more to the point though, we don't control if chrome decides to send multiple websocket frames in a single tcp packet. This makes it difficult to use the same buffer to return the result.
+
+// we might as well just take the slice then, having the network buffer does us no good. should we force a minimum size of the stream, or handle it here? we clearly are going to have at least the header before calling here, 
+   pub fn handle_start(
+        db: Ptr<Db>, 
+        mut thread: Ptr<Thread>,
+        connection: Ptr<Connection>,
+        streamid: u64, // we need this to return, but we have already looked in the connection map and know that this does not exist.
+        buf: &[u8],
+        fin: bool
+    )  {
+        let header = match StreamHeader::new(buf) {
+            Ok(header) => header,
+            Err(e) => {
+                thread.result_error(connection, streamid, -1);
+                return;
+            }
+        };
+        // now hopefully we can simply execute the procedure and schedule a packet to be sent back with no async needed. otherwise the procedure will spawn a task that will send the result back.
+
+        // getting the procedure might require an async call, so in that case we will need to spawn.
+        match db.get_procedure(header) {
+            Some(proc) => {
+                let fut = proc(thread, connection);
+                thread.spawn(fut);
+            }
+            None => {
+               // async 
+            }
+        }
+
+    }
+
+
+
+// for web sockets we use messages to frame
 impl Db {
-    // we don't know when we get the first packet of a stream in quic, we have to look in a map to see if we have an existing stream.
+
+    pub fn get_procedure(&self, hd: StreamHeader) -> Option<Proc> {
+        let iface = self.iface.get(hd.iface as usize)?;
+        let proc = iface.proc.get(hd.procid as usize)?;
+        Some(*proc)
+    }
+
+    // optimizize the case where we get the entire stream in a single read.
+     // we don't know when we get the first packet of a stream in quic, we have to look in a map to see if we have an existing stream.
     pub fn handle_read(
         &self,
         mut thread: Ptr<Thread>,
         connection: Ptr<Connection>,
+        // 
         streamid: u64,
-        buf: NetworkBuffer,
+        first8: u64,
         first: bool,
         last: bool,
     ) -> DbResult<()> {
-        let (stmt, first) =  match thread.stream.entry(streamid) {
+        let (stmt, first) =  match connection.stream.entry(streamid) {
             Entry::Occupied(mut occ) => {
                 // Already existed
                 ( occ.get_mut(), false)
                 
             }
             Entry::Vacant(vac) => {
+                // optimize for single packet.
                 let o = Statement {};
                 vac.insert(o);
                 (o, true)
             }
-        }
+        };
         // the first packet in a stream must be at least 8 bytes, (aside from the stream id in the header)
         // probably don't need to check here?
-        if buf.len() < 8 {
-            return Err(DbError::InvalidArgument);
-        }
+
         // read 4 byte little endian environment and 4 byte little endian procid
-        let env = read_u16(buf, 0..2)?;
-        let iface = read_u16(buf, 2..4)?;
-        let procid = read_u16(buf, 4..6)?;
-        let continues = read_u16(buf, 6..8)?;
+        let header = match StreamHeader::new(buf) {
+            Ok(header) => header,
+            Err(e) => {
+                thread.result_error(connection, streamid, e.into());
+                return;
+            }
+        };
         let will_continue = continues & 1;
         // continues = 0 means that this statement is autocommit; when the stream is closed, the transaction is committed or rolled back.
         // continues = 1 means that this is the first statement of a transaction. the return value of the first statement will include a handle that allows the transaction to be continued with an additional stream.
