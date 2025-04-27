@@ -175,6 +175,20 @@ fn read_u32(input: &[u8], range: std::ops::Range<usize>) -> Result<u32, DbError>
         .ok_or(DbError::InvalidArgument)
 }
 
+pub struct NetworkBuffer {
+    ptr: *mut u8,
+    len: usize,
+}
+impl Copy for NetworkBuffer {}
+impl Clone for NetworkBuffer {
+    fn clone(&self) -> Self {
+        Self {
+            ptr: self.ptr,
+            len: self.len,
+        }
+    }
+}
+
 impl Db {
     // we don't know when we get the first packet of a stream in quic, we have to look in a map to see if we have an existing stream.
     pub fn handle_read(
@@ -182,7 +196,7 @@ impl Db {
         mut thread: Ptr<Thread>,
         connection: Ptr<Connection>,
         streamid: u64,
-        buf: &[u8],
+        buf: NetworkBuffer,
         first: bool,
         last: bool,
     ) -> DbResult<()> {
