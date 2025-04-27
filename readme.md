@@ -213,3 +213,11 @@ option 1; start with tuple, follow with blobs
 option 2; start with blobs, follow with tuple.
 
 starting with the tuple potentially allows us to compile special support into the proc, but do we want that complication?
+
+
+how to get the fastest possible lookup: packet in to packet out.
+
+good to reuse packet? I think erpc allows this.
+
+the packet that we get from uring is a packet that we posted. we can reuse it in the response. esp with ktls?
+

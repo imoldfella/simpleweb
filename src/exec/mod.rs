@@ -95,6 +95,8 @@ pub struct Db {
     pub thread: Box<[Thread]>,
 }
 
+// when a statement begins, it will get a memory block with the initial packet? an async function allocates before it even begins, so we might want to move the spawn into statement, that way the spawn (with allocation) might be avoided.
+
 pub struct Statement {
     // just a pointer to linked list of memory blocks?
     // are we going to start the procedure before we have the whole statement?
