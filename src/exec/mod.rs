@@ -57,24 +57,35 @@ pub struct User {}
 
 // we could restrict to environment, but passing the extra arguments allows them to stay in registers
 
+pub struct Vecb<T> {
+    pub vec: Box<[T]>,
+}
+impl<T> Vecb<T> {
+    pub fn get(&self, index: usize) -> Result<Ptr<T>, DbError> {
+        if index >= self.vec.len() {
+            return Err(DbError::InvalidArgument);
+        }
+        let ptr = self.vec.as_ptr() as *mut T;
+        Ok(Ptr {
+            ptr: unsafe { ptr.add(index) },
+        })
+    }
+}
 // we should probably take an arena as an argument, to allocate the pin future in it.
 // we want to allocate the transaction procedure inside the memory pool of the transaction.
 // where do helper tasks allocate in?
 type Proc = fn(
-    env: Ptr<Environment>,
     db: Ptr<Db>,
     thr: Ptr<DbThread>,
     cn: Ptr<Connection>,
-) -> Pin<Box<dyn Future<Output = ()>>>;
+    streamid: u64, // we need this to return, but we have already looked in the connection map and know that this does not exist.
+    buf: &[u8],
+    fin: bool,
+);
 // should we share these globally and deal with locks?
 // should we compile procedures dynamically or AOT?
-pub struct Iface {
-    pub proc: Box<[Proc]>,
-}
+type Iface = Vecb<Proc>;
 // capabilities are injected into the environment
-pub struct Environment {
-    iface: Box<[u32]>,
-}
 
 // interface = schema or no? is there a better security language we can use?
 // each schema has multiple partitions; the user is authorized to access a subset of the partitions (like row level security) why not use the schema as the interface? we can always create
@@ -83,7 +94,7 @@ pub struct Connection {
     pub user: u32,
 
     // authorize connection, allows other rules than simply user (location, time)
-    pub env: Box<[u32]>,
+    pub iface: Vecb<Iface>,
     pub statement: Box<[Statement]>,
     pub stream: HashMap<u64, Ptr<Statement>>,
 }
@@ -100,17 +111,13 @@ pub struct Db {
 pub struct Statement {
     // just a pointer to linked list of memory blocks?
     // are we going to start the procedure before we have the whole statement?
-    // might need annotations for rolling back? 
+    // might need annotations for rolling back?
 }
-
 
 pub struct DbThread {
     is_uring: bool,
     pub connection: Box<[Connection]>,
-    pub env: Box<[Environment]>,
     pub statement: Box<[Statement]>,
-    pub proc: HashMap<u32, DbProc>,
-
 }
 
 pub struct CountFuture {}
@@ -221,68 +228,62 @@ impl StreamHeader {
     }
 }
 
-// quic can pack multiple frames (multiple streams) into a packet on a connection. if we model this using websockets we could send multiple rpcs in a single websocket frame. 
+// quic can pack multiple frames (multiple streams) into a packet on a connection. if we model this using websockets we could send multiple rpcs in a single websocket frame.
 // more to the point though, we don't control if chrome decides to send multiple websocket frames in a single tcp packet. This makes it difficult to use the same buffer to return the result.
 
-// we might as well just take the slice then, having the network buffer does us no good. should we force a minimum size of the stream, or handle it here? we clearly are going to have at least the header before calling here, 
+// we might as well just take the slice then, having the network buffer does us no good. should we force a minimum size of the stream, or handle it here? we clearly are going to have at least the header before calling here,
 
-type TryMaybeFuture = Result<Option<Box<dyn Future<Output=()>>>, DbError>;
-   // handle start of a stream
-   // we might resolve immediately (fast path) or we might return a future
-   // if not fin, then we will always return a future or error.
-   // if fin, then we can return a future or error or Done.
-   // simple lookups and writes to temporary tables don't need to be async
-   // these create no log entries, and if cached require no io.
-   // we don't need to return the future? just spawn it from here?
-   pub fn handle_start(
-        db: Ptr<Db>, 
-        mut thread: Ptr<DbThread>,
-        connection: Ptr<Connection>,
-        streamid: u64, // we need this to return, but we have already looked in the connection map and know that this does not exist.
-        buf: &[u8],
-        fin: bool
-    )  -> TryMaybeFuture{
-        let header =  StreamHeader::new(buf)?;
+type TryMaybeFuture = Result<Option<Box<dyn Future<Output = ()>>>, DbError>;
+// handle start of a stream
+// we might resolve immediately (fast path) or we might return a future
+// if not fin, then we will always return a future or error.
+// if fin, then we can return a future or error or Done.
+// simple lookups and writes to temporary tables don't need to be async
+// these create no log entries, and if cached require no io.
+// we don't need to return the future? just spawn it from here?
+pub fn handle_read(
+    db: Ptr<Db>,
+    thread: Ptr<DbThread>,
+    connection: Ptr<Connection>,
+    streamid: u64, // we need this to return, but we have already looked in the connection map and know that this does not exist.
+    buf: &[u8],
+    fin: bool,
+) -> Result<(), DbError> {
+    let str = thread.stream.get(streamid as usize);
+    if let Some(str) = str {}
+    // stream does not exist, treat as a new stream
+    let header = StreamHeader::new(buf)?;
 
-        // now hopefully we can simply execute the procedure and schedule a packet to be sent back with no async needed. otherwise the procedure will spawn a task that will send the result back.
+    // now hopefully we can simply execute the procedure and schedule a packet to be sent back with no async needed. otherwise the procedure will spawn a task that will send the result back.
 
-        // getting the procedure might require an async call, so in that case we will need to spawn. 
-        //db.exec_procedure(header)?
-        // the interface must already be injected into the environment.
-
-        Ok(None)
-    }
-
-
+    // getting the procedure might require an async call, so in that case we will need to spawn.
+    //db.exec_procedure(header)?
+    // the interface must already be injected into the environment.
+    let iface = connection.iface.get(header.iface as usize)?;
+    let proc = iface.get(header.procid as usize)?;
+    // if not finished we need the procedure to accept more packets as they arrive. it will need to spawn a task to do this. o
+    proc(db, thread, connection, streamid, buf, fin);
+    Ok(())
+}
 
 // for web sockets we use messages to frame
 impl Db {
-
-    
-
-    pub fn get_procedure(&self, hd: StreamHeader) -> Option<Proc> {
-        let iface = self.iface.get(hd.iface as usize)?;
-        let proc = iface.proc.get(hd.procid as usize)?;
-        Some(*proc)
-    }
-
     // optimizize the case where we get the entire stream in a single read.
-     // we don't know when we get the first packet of a stream in quic, we have to look in a map to see if we have an existing stream.
+    // we don't know when we get the first packet of a stream in quic, we have to look in a map to see if we have an existing stream.
     pub fn handle_read(
         &self,
         mut thread: Ptr<DbThread>,
         connection: Ptr<Connection>,
-        // 
+        //
         streamid: u64,
         first8: u64,
         first: bool,
         last: bool,
     ) -> DbResult<()> {
-        let (stmt, first) =  match connection.stream.entry(streamid) {
+        let (stmt, first) = match connection.stream.entry(streamid) {
             Entry::Occupied(mut occ) => {
                 // Already existed
-                ( occ.get_mut(), false)
-                
+                (occ.get_mut(), false)
             }
             Entry::Vacant(vac) => {
                 // optimize for single packet.
