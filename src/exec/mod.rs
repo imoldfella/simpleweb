@@ -63,7 +63,7 @@ pub struct User {}
 type Proc = fn(
     env: Ptr<Environment>,
     db: Ptr<Db>,
-    thr: Ptr<Thread>,
+    thr: Ptr<DbThread>,
     cn: Ptr<Connection>,
 ) -> Pin<Box<dyn Future<Output = ()>>>;
 // should we share these globally and deal with locks?
@@ -92,7 +92,7 @@ pub struct Db {
     // is it plausible to have users assigned to a thread? the problem is that the user does not show up in source. we could potentially have multiple ports and then webtransport to the port that the user is assigned to. CID, but only with quic, user routing to port, but makes deployment more complex.
     pub user: Box<[User]>,
     pub iface: Box<[Iface]>,
-    pub thread: Box<[Thread]>,
+    pub thread: Box<[DbThread]>,
 }
 
 // when a statement begins, it will get a memory block with the initial packet? an async function allocates before it even begins, so we might want to move the spawn into statement, that way the spawn (with allocation) might be avoided.
@@ -102,12 +102,14 @@ pub struct Statement {
     // are we going to start the procedure before we have the whole statement?
     // might need annotations for rolling back? 
 }
-pub struct Thread {
+
+
+pub struct DbThread {
     is_uring: bool,
     pub connection: Box<[Connection]>,
     pub env: Box<[Environment]>,
     pub statement: Box<[Statement]>,
-
+    pub proc: HashMap<u32, DbProc>,
 
 }
 
@@ -141,7 +143,7 @@ pub enum DbError {
 }
 type DbResult<T> = std::result::Result<T, DbError>;
 
-impl Thread {
+impl DbThread {
     pub fn spawn(&self, fut: Pin<Box<dyn Future<Output = ()>>>) {
         // spawn the future on the thread
         // this is a no-op for now
@@ -223,40 +225,40 @@ impl StreamHeader {
 // more to the point though, we don't control if chrome decides to send multiple websocket frames in a single tcp packet. This makes it difficult to use the same buffer to return the result.
 
 // we might as well just take the slice then, having the network buffer does us no good. should we force a minimum size of the stream, or handle it here? we clearly are going to have at least the header before calling here, 
+
+type TryMaybeFuture = Result<Option<Box<dyn Future<Output=()>>>, DbError>;
+   // handle start of a stream
+   // we might resolve immediately (fast path) or we might return a future
+   // if not fin, then we will always return a future or error.
+   // if fin, then we can return a future or error or Done.
+   // simple lookups and writes to temporary tables don't need to be async
+   // these create no log entries, and if cached require no io.
+   // we don't need to return the future? just spawn it from here?
    pub fn handle_start(
         db: Ptr<Db>, 
-        mut thread: Ptr<Thread>,
+        mut thread: Ptr<DbThread>,
         connection: Ptr<Connection>,
         streamid: u64, // we need this to return, but we have already looked in the connection map and know that this does not exist.
         buf: &[u8],
         fin: bool
-    )  {
-        let header = match StreamHeader::new(buf) {
-            Ok(header) => header,
-            Err(e) => {
-                thread.result_error(connection, streamid, -1);
-                return;
-            }
-        };
+    )  -> TryMaybeFuture{
+        let header =  StreamHeader::new(buf)?;
+
         // now hopefully we can simply execute the procedure and schedule a packet to be sent back with no async needed. otherwise the procedure will spawn a task that will send the result back.
 
-        // getting the procedure might require an async call, so in that case we will need to spawn.
-        match db.get_procedure(header) {
-            Some(proc) => {
-                let fut = proc(thread, connection);
-                thread.spawn(fut);
-            }
-            None => {
-               // async 
-            }
-        }
+        // getting the procedure might require an async call, so in that case we will need to spawn. 
+        //db.exec_procedure(header)?
+        // the interface must already be injected into the environment.
 
+        Ok(None)
     }
 
 
 
 // for web sockets we use messages to frame
 impl Db {
+
+    
 
     pub fn get_procedure(&self, hd: StreamHeader) -> Option<Proc> {
         let iface = self.iface.get(hd.iface as usize)?;
@@ -268,7 +270,7 @@ impl Db {
      // we don't know when we get the first packet of a stream in quic, we have to look in a map to see if we have an existing stream.
     pub fn handle_read(
         &self,
-        mut thread: Ptr<Thread>,
+        mut thread: Ptr<DbThread>,
         connection: Ptr<Connection>,
         // 
         streamid: u64,
@@ -342,7 +344,7 @@ impl Db {
     }
 }
 
-pub async fn some_fn(os: Thread, connection: Connection) -> CountResult {
+pub async fn some_fn(os: DbThread, connection: Connection) -> CountResult {
     let buf = vec![0; 1024];
     let result = os.read_some(connection, &[]).await;
     result
@@ -351,7 +353,7 @@ pub async fn some_fn(os: Thread, connection: Connection) -> CountResult {
 // an rpc will have some number of blobs; the final blob is the parameter block.
 // the initial blobs maybe stored to disk depending on memory pressure.
 //
-pub async fn read_rpc(os: Thread, connection: Connection) -> CountResult {
+pub async fn read_rpc(os: DbThread, connection: Connection) -> CountResult {
     let buf = vec![0; 1024];
     let result = os.read_some(connection, &buf).await;
     result
