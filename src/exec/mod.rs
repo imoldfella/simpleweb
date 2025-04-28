@@ -13,6 +13,24 @@ use rustls::pki_types::Der;
 
 //static mut IS_URING : bool = false;
 
+
+// each procedure has n blobs, and up to nnK bytes of inline data.
+// the blobs may be written to disk (for some procedures we might actually want this as early as possible? can that be a hint? seperate count for eager or lazy writing of blobs?)
+// is it too limiting to force the parameter block to be reified before the procedure starts? In general this is a good thing, since it allows us to build it outside a transaction. We can retry the transaction if it fails without rebuilding the parameter block.
+
+
+
+
+pub struct Blob {
+
+}
+pub struct ParameterBlock {
+    pub blob: Box<[Blob]>,
+    pub inline: Box<[u8]>,
+}
+
+
+
 pub struct Ptr<T> {
     ptr: *mut T,
 }
@@ -74,13 +92,16 @@ impl<T> Vecb<T> {
 // we should probably take an arena as an argument, to allocate the pin future in it.
 // we want to allocate the transaction procedure inside the memory pool of the transaction.
 // where do helper tasks allocate in?
+
+// either returns a result or spawns a task that returns a result.
 type Proc = fn(
     db: Ptr<Db>,
     thr: Ptr<DbThread>,
     cn: Ptr<Connection>,
+    pm: &ParameterBlock,  // reference or pointer? the proc might need it move it into the closure.
     streamid: u64, // we need this to return, but we have already looked in the connection map and know that this does not exist.
-    buf: &[u8],
-    fin: bool,
+    // buf: &[u8],
+    // fin: bool,
 );
 // should we share these globally and deal with locks?
 // should we compile procedures dynamically or AOT?
@@ -95,8 +116,8 @@ pub struct Connection {
 
     // authorize connection, allows other rules than simply user (location, time)
     pub iface: Vecb<Iface>,
-    pub statement: Box<[Statement]>,
-    pub stream: HashMap<u64, Ptr<Statement>>,
+    pub statement: Box<[DbStream]>,
+    pub stream: HashMap<u64, DbStream>,
 }
 
 pub struct Db {
@@ -108,16 +129,25 @@ pub struct Db {
 
 // when a statement begins, it will get a memory block with the initial packet? an async function allocates before it even begins, so we might want to move the spawn into statement, that way the spawn (with allocation) might be avoided.
 
-pub struct Statement {
-    // just a pointer to linked list of memory blocks?
-    // are we going to start the procedure before we have the whole statement?
-    // might need annotations for rolling back?
+// pub struct DbStream {
+//     // just a pointer to linked list of memory blocks?
+//     // are we going to start the procedure before we have the whole statement?
+//     // might need annotations for rolling back?
+// }
+//type DbStream = Box<dyn Future<Output = ()>>;
+
+// instead of futures, can we use something that takes our slice? but then if that future needs to block for something, how would we manage that? otoh how do we (temporarily) store the new network packet if we can't immediately feed it to the future? what if the future is not ready to accept it, eg. is still writing the previous packet?
+// would it make more sense to use an intermediate layer that attempts to cache the entire stream in memory, but falls back to swapping to disk? such a layer would need to understand something about the layout of the procedure block, at least the blobs.
+pub struct DbStream {
+    
 }
+
 
 pub struct DbThread {
     is_uring: bool,
     pub connection: Box<[Connection]>,
-    pub statement: Box<[Statement]>,
+    pub statement: Box<[DbStream]>,
+   
 }
 
 pub struct CountFuture {}
@@ -249,8 +279,11 @@ pub fn handle_read(
     buf: &[u8],
     fin: bool,
 ) -> Result<(), DbError> {
-    let str = thread.stream.get(streamid as usize);
-    if let Some(str) = str {}
+    let str = connection.stream.get(&streamid);
+    if let Some(str) = str {
+        // we need to wake the procedure to accept this packet.
+        // 
+    }
     // stream does not exist, treat as a new stream
     let header = StreamHeader::new(buf)?;
 
@@ -287,7 +320,7 @@ impl Db {
             }
             Entry::Vacant(vac) => {
                 // optimize for single packet.
-                let o = Statement {};
+                let o = DbStream {};
                 vac.insert(o);
                 (o, true)
             }
