@@ -221,3 +221,64 @@ good to reuse packet? I think erpc allows this.
 
 the packet that we get from uring is a packet that we posted. we can reuse it in the response. esp with ktls?
 
+the number of blobs is set by the parameter block description.
+first there is eager blobs, then lazy blobs, then the parameter blob which is always cached but must be under 256K.
+// 
+end[]
+blob 
+blob
+blob - last blob is 
+
+is there a difference between a blob and a string? (do strings exist in the blob part of the struct part?)
+
+blobs can have types:
+utf8
+binary
+arrow<schema>
+umbra<schema>
+
+we could extend the umbra schema to 
+1. use 64 bit ends
+2. blob references (out of tuple). not really an extension, lectures describe two ways to do this: extents and btree.
+3. hints (lazy/eager); could be added by compiler
+
+potentially sorting all the varlen fields first allows them to be compressed more easily - worth it?
+is it worth compression all the 8 bit integer fields in this way? is it worth teasing out the 4 byte integers as well?
+this would be similar to umbra sorted fields, but compressing them.
+
+schema = [ varlen field count, 8 byte integer field count, 8 byte float count, 4 byte integer count,  4 byte field count, 2 byte field count, 1 byte field count]
+
+feels like overkill compressing a few integers with stream vbyte, fastlanes, maybe varint instead?
+
+// the eager lazy distinction only matters for parameters, but we store it with all tables? potentially having it as part of the table type would let us infer the parameter type?
+parameter block schema = [ eager count, lazy count, integer count, binary len]
+
+potentially start stream with binary data? this allows it to be aligned, where the varint arrays are u8 anyway.
+can strings be lazy varlen or maybe all the strings are in one lazy blob with their offsets in integer count? is that easier? 
+
+rpc_schema [ binary, varlen, integer, stored, temp]
+
+we can read 
+1. binary bytes
+2. temp+stored+varlen+integer integers
+3. sum(varlen) bytes.
+4. sum(stored) bytes
+5. sum(temp) bytes
+
+
+
+
+most blobs can be eager, we only need lazy for values that will be computed from in the procedure (like a temp table) these generally are not even fields.
+
+
+when stored in a tuple, what is the representation of a blob?
+
+1. Offset / length (128 bit? possibly squeeze by factor of 4096, maybe enough for 32:32)
+2. btree id (64 bit)
+3. Extent list (leanstore) - 127bytes
+
+1 is out if we want the blob to allow appends.
+
+so maybe the approach is that a blob is varlen extent list. (one fixed extent followed by one leanstore extent list)
+
+lazy blobs could be treated as temp blobs - gc'd when the 

@@ -13,23 +13,15 @@ use rustls::pki_types::Der;
 
 //static mut IS_URING : bool = false;
 
-
 // each procedure has n blobs, and up to nnK bytes of inline data.
 // the blobs may be written to disk (for some procedures we might actually want this as early as possible? can that be a hint? seperate count for eager or lazy writing of blobs?)
 // is it too limiting to force the parameter block to be reified before the procedure starts? In general this is a good thing, since it allows us to build it outside a transaction. We can retry the transaction if it fails without rebuilding the parameter block.
 
-
-
-
-pub struct Blob {
-
-}
+pub struct Blob {}
 pub struct ParameterBlock {
     pub blob: Box<[Blob]>,
     pub inline: Box<[u8]>,
 }
-
-
 
 pub struct Ptr<T> {
     ptr: *mut T,
@@ -98,10 +90,10 @@ type Proc = fn(
     db: Ptr<Db>,
     thr: Ptr<DbThread>,
     cn: Ptr<Connection>,
-    pm: &ParameterBlock,  // reference or pointer? the proc might need it move it into the closure.
+    pm: &ParameterBlock, // reference or pointer? the proc might need it move it into the closure.
     streamid: u64, // we need this to return, but we have already looked in the connection map and know that this does not exist.
-    // buf: &[u8],
-    // fin: bool,
+                   // buf: &[u8],
+                   // fin: bool,
 );
 // should we share these globally and deal with locks?
 // should we compile procedures dynamically or AOT?
@@ -138,16 +130,12 @@ pub struct Db {
 
 // instead of futures, can we use something that takes our slice? but then if that future needs to block for something, how would we manage that? otoh how do we (temporarily) store the new network packet if we can't immediately feed it to the future? what if the future is not ready to accept it, eg. is still writing the previous packet?
 // would it make more sense to use an intermediate layer that attempts to cache the entire stream in memory, but falls back to swapping to disk? such a layer would need to understand something about the layout of the procedure block, at least the blobs.
-pub struct DbStream {
-    
-}
-
+pub struct DbStream {}
 
 pub struct DbThread {
     is_uring: bool,
     pub connection: Box<[Connection]>,
     pub statement: Box<[DbStream]>,
-   
 }
 
 pub struct CountFuture {}
@@ -271,6 +259,10 @@ type TryMaybeFuture = Result<Option<Box<dyn Future<Output = ()>>>, DbError>;
 // simple lookups and writes to temporary tables don't need to be async
 // these create no log entries, and if cached require no io.
 // we don't need to return the future? just spawn it from here?
+// what about a list of varints, (streamvbyte? that is primarily 32 bit)
+//
+
+// somproc(x: LazyBlob, y: EagerBlob, z: u64)
 pub fn handle_read(
     db: Ptr<Db>,
     thread: Ptr<DbThread>,
@@ -281,8 +273,12 @@ pub fn handle_read(
 ) -> Result<(), DbError> {
     let str = connection.stream.get(&streamid);
     if let Some(str) = str {
-        // we need to wake the procedure to accept this packet.
-        // 
+        // we need to build the parameter block on packet at a time.
+        // try to cache the the lazy blobs, aggresively write the eager blobs.
+
+        if fin {
+            // invoke the procedure.
+        }
     }
     // stream does not exist, treat as a new stream
     let header = StreamHeader::new(buf)?;
@@ -295,7 +291,8 @@ pub fn handle_read(
     let iface = connection.iface.get(header.iface as usize)?;
     let proc = iface.get(header.procid as usize)?;
     // if not finished we need the procedure to accept more packets as they arrive. it will need to spawn a task to do this. o
-    proc(db, thread, connection, streamid, buf, fin);
+
+    proc(db, thread, connection, streamid, pb);
     Ok(())
 }
 
